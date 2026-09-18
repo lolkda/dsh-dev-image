@@ -92,11 +92,13 @@ docker pull ghcr.io/lolkda/dsh-dev-image:latest
 
 **版本号只写在 Dockerfile 的 ARG 默认值里**，CI 不重复声明 —— 改版本改那一行就够了。
 
-> 首次构建后如果包是私有的，匿名 `docker pull` 会 404。去
-> `https://github.com/users/lolkda/packages/container/dsh-dev-image/settings`
-> 把 visibility 改成 public。
+> **已实测**：公开仓库推的 GHCR 包默认可匿名拉取，不需要手动改 visibility。
+> 匿名请求 `ghcr.io/v2/lolkda/dsh-dev-image/manifests/latest` 返回 200。
 >
-> arm64 走 QEMU 模拟，整轮可能 20-30 分钟（JVM 那几步尤其慢）。想快就换原生 ARM runner，workflow 顶部注释里有写法。
+> arm64 走 QEMU 模拟，整轮约 25 分钟。想快就换原生 ARM runner，workflow 顶部注释里有写法。
+>
+> 镜像不小：amd64 压缩后约 1.4 GB，arm64 约 1.3 GB。大头是 gradle（解压后约 200MB）、
+> Go 工具链、JDK，以及 apt 那一层。想瘦身就删 gradle 或 gdb。
 
 ## 进去干活
 
