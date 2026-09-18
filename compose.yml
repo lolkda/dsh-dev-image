@@ -1,0 +1,100 @@
+# =============================================================================
+#  dev-agent —— 默认配置：零配置直接访问
+#
+#      docker compose up -d
+#      → 浏览器开 http://<宿主机IP>:3080
+#
+#  就这样，不需要填任何 IP。
+#
+#  原理：network_mode: host 让容器共享宿主网络栈，于是 dsh 的 /api Host 围栏
+#  在自动派生信任列表时，看到的就是宿主真实网卡：
+#      Object.values(networkInterfaces()).flat()
+#        .filter(i => i.family === "IPv4" && !i.internal).map(i => i.address)
+#  LAN / Tailscale / ZeroTier / VPN 全部自动可信，DHCP 变了重启就跟着变。
+#
+#  为什么 bridge 模式做不到零配置：
+#    bridge 下容器看到的网卡是 172.x，浏览器发的 Host 是宿主地址，对不上 →
+#    /api 403（围栏是精确匹配，不支持通配）。要修就得手工填一次宿主 IP。
+#    需要容器网络隔离时用那个方案：compose.bridge.yml
+#
+#  ⚠️ 唯一要注意的：host 模式下 dsh 绑 0.0.0.0，会在【所有】宿主网卡上监听。
+#     这台机器只要有公网 IP，防火墙就不是可选项：
+#         ufw allow from 192.168.1.0/24 to any port 3080 proto tcp
+#         ufw allow in on tailscale0 to any port 3080 proto tcp
+#         ufw deny 3080/tcp
+# =============================================================================
+name: dev-agent
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GO_VERSION: "1.27.1"
+        JDK_VERSION: "24"
+        DSH_VERSION: "0.1.6-alpha.2"
+        PNPM_VERSION: "12.4.2"
+        USER_UID: "1000"
+        USER_GID: "1000"
+    image: ghcr.io/lolkda/dsh-dev-image:latest
+
+    init: true
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+    # ---- 零配置的关键就这一行 ----
+    network_mode: host
+    # 注意：host 模式下不能写 ports:，也不能写 networks:
+
+    volumes:
+      - ${AGENT_WORKSPACE:-/srv/agent/workspace}:/workspace
+      - agent-cache:/opt/cache
+      - cargo-registry:/usr/local/cargo/registry
+      - dsh-home:/home/agent/.dsh
+
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+
+      # --- DSH 插件（启动时由 entrypoint 登记，见 entrypoint.sh）------------
+      DSH_PROFILE: ${DSH_PROFILE:-web}
+      DSH_PLUGINS: ${DSH_PLUGINS:-@lolkda/dsh-web-lan@^0.1.0}
+      # 离线环境设 0，插件装不上也继续启动
+      DSH_PLUGINS_REQUIRED: ${DSH_PLUGINS_REQUIRED:-1}
+
+      # host 模式下宿主所有网卡 IP 已自动可信，这里通常留空。
+      # 只有用【域名】访问时才需要把那个域名写进来。
+      DSH_WEB_TRUSTED_HOSTS: ${DSH_WEB_TRUSTED_HOSTS:-}
+
+    # --- 资源限制：这台机器上还跑着线上服务，这几行不是可选项 -------------
+    cpus: "4"
+    mem_limit: 8g
+    # 防 fork bomb：agent 跑失控的构建/测试会 fork 爆宿主机
+    pids_limit: 2048
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # gdb / strace 需要 ptrace，否则跑不起来。
+      # 容器的 PID namespace 是独立的，所以它只能 trace 容器自己的进程，
+      # 摸不到宿主进程（经典风险是 CAP_SYS_PTRACE + --pid=host，这里没有）。
+      - SYS_PTRACE
+
+    # 日志上限，否则 agent 的长输出会把磁盘写满
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # 依然刻意没有挂 /var/run/docker.sock
+
+volumes:
+  agent-cache:
+  cargo-registry:
+  dsh-home:

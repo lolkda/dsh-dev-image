@@ -1,0 +1,97 @@
+# =============================================================================
+#  构建并发布镜像到 GHCR
+#
+#  发布地址：ghcr.io/<owner>/<repo>
+#    push 到 main     → :main 和 :latest
+#    push tag v1.2.3  → :1.2.3 / :1.2 / :latest
+#    PR               → 只构建不推送，且只构建 amd64（省时间）
+#    手动触发          → 同上
+#
+#  版本号不在这里写死：Dockerfile 里每个 ARG 的默认值就是唯一来源。
+#  要改 Go / JDK / Gradle / uv / yq / DSH 的版本，改 Dockerfile 那一行。
+#
+#  多架构：amd64 + arm64。arm64 走 QEMU 模拟，所以慢（JVM 那几步尤其慢，
+#  整轮可能 20-30 分钟）。想快很多就换成原生 ARM runner（公开仓库免费）：
+#     strategy:
+#       matrix:
+#         include:
+#           - runner: ubuntu-latest
+#             platform: linux/amd64
+#           - runner: ubuntu-24.04-arm
+#             platform: linux/arm64
+#  然后按 platform 分别 push digest，最后用一个 merge job 合 manifest。
+#  或者干脆把 platforms 改成只留 linux/amd64。
+#
+#  首次构建后如果包是私有的，匿名拉取会 404。去
+#  https://github.com/users/<owner>/packages/container/<repo>/settings
+#  把 visibility 改成 public。
+# =============================================================================
+name: build-and-publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 关掉 attestation：它会往 manifest 里塞 unknown/unknown 平台条目，
+          # 让 docker manifest inspect 看起来莫名其妙。自用开发镜像没必要。
+          provenance: false
+          sbom: false
+          # gha 缓存：Dockerfile 里那些大下载（JDK / Go / Gradle / rust 组件）
+          # 靠层缓存复用，第二次构建快很多。
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

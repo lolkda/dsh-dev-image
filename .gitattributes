@@ -1,0 +1,16 @@
+# 这个仓库的目标平台是 Linux 容器，任何 CRLF 都会造成真实故障
+# （entrypoint.sh 带 \r 会让容器里的 bash 报 "no such file or directory"）。
+# 强制 LF，防止以后在 Windows 上编辑时被自动转成 CRLF。
+* text=auto eol=lf
+
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+
+# 二进制资源不做行尾处理
+*.png binary
+*.jpg binary
+*.gz  binary
+*.zip binary
