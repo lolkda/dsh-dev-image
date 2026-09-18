@@ -57,7 +57,18 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 ## 部署
 
 ```bash
+# 1. 拿文件
+git clone https://github.com/lolkda/dsh-dev-image.git
+cd dsh-dev-image
+
+# 2. 准备挂载目录（默认挂 /srv/agent/workspace，可用 AGENT_WORKSPACE 改）
+mkdir -p /srv/agent/workspace
+
+# 3. 起（自动拉镜像）
 docker compose up -d
+
+# 4. 看日志，确认插件装上了
+docker compose logs -f
 ```
 
 然后浏览器直接开：
@@ -67,6 +78,19 @@ http://<宿主机IP>:3080
 ```
 
 **不需要填任何 IP，没有别的步骤。**
+
+容器起来就直接跑 `dsh web`，不用再 exec 进去手动启动。要 shell 就另开一个终端：
+
+```bash
+docker compose exec agent bash
+```
+
+想跑别的：
+
+```bash
+docker compose run --rm agent dsh headless "跑一下测试"   # 一次性任务
+docker compose run --rm agent dsh tui                     # 终端界面
+```
 
 `compose.yml` 的 `image:` 指向已发布镜像，`docker compose up` 会自动拉。想本地自己构建就加 `--build`：
 

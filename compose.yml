@@ -41,7 +41,10 @@ services:
 
     init: true
     working_dir: /workspace
-    command: ["sleep", "infinity"]
+    # 直接跑 Web GUI —— docker compose up -d 之后浏览器就能开，不用再 exec 进去手动起。
+    # 需要 shell 就另开一个终端：docker compose exec agent bash
+    # 想跑别的：docker compose run --rm agent dsh headless "跑一下测试"
+    command: ["dsh", "web"]
     stdin_open: true
     tty: true
     restart: unless-stopped
