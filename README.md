@@ -45,8 +45,8 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 | `gradle` | 9.7.1 | Debian 的是 **4.4.1**（2017 年的），现代项目根本用不了 → 官方 distribution + sha256 |
 | `yq` | 4.53.6 | Debian 的是 **3.1.0**，那是 Python 版、语法和 mikefarah v4 完全不同（`yq -y` vs `yq -o=yaml`），装错比不装更坑 → 官方二进制 + 校验和 |
 | `uv` | 0.12.17 | 不在 Debian → `pip install`（会校验 PyPI 哈希，比 `curl \| sh` 干净） |
-| `maven` | 3.8.7 | Debian 版本够用，直接 apt |
-| `gh` | 2.23.0 | 同上（旧但能用） |
+| `maven` | 3.9.16 | Debian 的 maven 包硬依赖 `default-jre-headless`，会拖进整套 openjdk-17（约 150MB）并把 `/usr/bin/java` 指向它 → 官方 tarball |
+| `gh` | 2.23.0 | Debian 版本够用，直接 apt（旧但能用） |
 
 `MAVEN_CONFIG` 和 `GRADLE_USER_HOME` 都指向 `/opt/cache`，随 `agent-cache` 卷持久化。
 

@@ -18,7 +18,7 @@
 #  glibc 规则（改版本时必读）：
 #    被 COPY 的来源镜像 glibc 必须 <= base 的 2.36。
 #    node / rust 都取 bookworm 变体（2.36）—— 相等，安全。
-#    Go / Java / Gradle / yq 走官方 tarball，原因见各自段落。
+#    Go / Java / Maven / Gradle / yq 走官方 tarball，原因见各自段落。
 # =============================================================================
 
 # ---- 运行时来源层：只用于 COPY，不进入最终镜像 ------------------------------
@@ -32,6 +32,7 @@ ARG GO_VERSION=1.27.1
 ARG JDK_VERSION=24
 ARG DSH_VERSION=0.1.6-alpha.2
 ARG PNPM_VERSION=12.4.2
+ARG MAVEN_VERSION=3.9.16
 ARG GRADLE_VERSION=9.7.1
 ARG UV_VERSION=0.12.17
 ARG YQ_VERSION=4.53.6
@@ -48,8 +49,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #
 # 铁律：绝不 apt 安装任何语言运行时（python3 / nodejs / golang / openjdk-*）。
 # 它们会和下面 COPY 进来的抢 /usr/bin 与 /usr/local，症状是"版本看着对、
-# 实际跑的是另一个"。apt 只负责系统库、命令行工具、以及 Debian 版本足够新的
-# 那些（maven / gh 够用；gradle / yq 不够，见下）。
+# 实际跑的是另一个"。
+#
+# 特别注意 maven：Debian 的 maven 包硬依赖 `default-jre-headless | java7-runtime-headless`，
+# 而 default-jre-headless 会拖进整套 openjdk-17-jre-headless（约 150MB），
+# 还会让 update-alternatives 把 /usr/bin/java 指向 17 —— 正好踩中上面那条铁律。
+# 所以 maven 也走官方 tarball，见下。
+#
+# apt 只负责系统库和命令行工具（gh 够用；maven / gradle / yq 都不够，见下）。
 #
 # build-essential 是必需的，不只是为了编译：它提供 libstdc++6 和 libgcc_s，
 # 而 node、rustc、libjvm.so 都动态链接这两个；rust / go(cgo) 还需要一个 cc
@@ -73,7 +80,7 @@ RUN set -eux; \
         shellcheck git-lfs \
         cmake ninja-build autoconf automake libtool \
         gdb strace \
-        maven gh; \
+        gh; \
     rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
@@ -94,7 +101,7 @@ ENV JAVA_HOME=/opt/java \
     GRADLE_USER_HOME=/opt/cache/gradle \
     UV_CACHE_DIR=/opt/cache/uv \
     DSH_HOME=/home/agent/.dsh \
-    PATH=/opt/java/bin:/opt/gradle/bin:/usr/local/cargo/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/java/bin:/opt/maven/bin:/opt/gradle/bin:/usr/local/cargo/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # -----------------------------------------------------------------------------
 # Node 24
@@ -122,6 +129,10 @@ RUN set -eux; node -v; npm -v; yarn --version
 # rustc / cargo / rust-std，没有这两个。对 agent 来说 cargo clippy 和
 # cargo fmt 是最常用的两个命令，缺了等于半残。
 #
+# 冒烟验证用 `rustfmt --version`，不要用 `cargo fmt -V`：cargo-fmt 自己解析
+# 参数（Usage: cargo fmt [OPTIONS] [-- <rustfmt_options>...]），不接受 -V，
+# 会直接 exit 2 把构建打断。cargo clippy -V 是好的。
+#
 # 官方镜像会 chmod -R a+w 这两个目录，这里照做：即使以后去掉 /usr/local 的
 # chown，非 root 也还能用。
 # -----------------------------------------------------------------------------
@@ -130,7 +141,8 @@ COPY --from=src-rust /usr/local/cargo/  /usr/local/cargo/
 RUN set -eux; \
     rustup component add clippy rustfmt; \
     chmod -R a+w /usr/local/rustup /usr/local/cargo; \
-    rustc -V; cargo -V; cargo clippy -V; cargo fmt -V
+    rustup component list --installed; \
+    rustc -V; cargo -V; cargo clippy -V; rustfmt --version
 
 # -----------------------------------------------------------------------------
 # Java —— 走 Adoptium 官方 tarball，不用 COPY
@@ -160,6 +172,28 @@ RUN set -eux; \
     tar -xzf /tmp/jdk.tar.gz -C /opt/java --strip-components=1; \
     rm -f /tmp/jdk.tar.gz; \
     java -version
+
+# -----------------------------------------------------------------------------
+# Maven —— 走官方 tarball，理由和 Gradle 不同
+#
+# Debian 的 maven 包硬依赖 default-jre-headless，apt 会连带装进整套
+# openjdk-17-jre-headless（约 150MB），同时 update-alternatives 把
+# /usr/bin/java 指向 17 —— 和本文件开头的铁律直接冲突，也让 `java` 的实际
+# 行为依赖 PATH 顺序。官方 tarball 既避开这个，又白送 3.9.x（Debian 是 3.8.7）。
+#
+# MAVEN_CONFIG 已指向 /opt/cache/m2，所以本地仓库落在 /opt/cache/m2/repository，
+# 随 agent-cache 卷持久化。
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    base="https://dlcdn.apache.org/maven/maven-3/${MAVEN_VERSION}/binaries"; \
+    file="apache-maven-${MAVEN_VERSION}-bin.tar.gz"; \
+    curl -fsSL -o /tmp/maven.tgz "${base}/${file}"; \
+    curl -fsSL -o /tmp/maven.tgz.sha512 "${base}/${file}.sha512"; \
+    echo "$(cat /tmp/maven.tgz.sha512)  /tmp/maven.tgz" | sha512sum -c -; \
+    mkdir -p /opt/maven; \
+    tar -xzf /tmp/maven.tgz -C /opt/maven --strip-components=1; \
+    rm -f /tmp/maven.tgz /tmp/maven.tgz.sha512; \
+    mvn -v
 
 # -----------------------------------------------------------------------------
 # Gradle —— 走官方 distribution，不用 apt
@@ -284,7 +318,7 @@ RUN set -eux; \
     python -V; \
     node -v; npm -v; yarn --version; pnpm --version; \
     go version; \
-    rustc -V; cargo -V; cargo clippy -V; cargo fmt -V; \
+    rustc -V; cargo -V; cargo clippy -V; rustfmt --version; \
     java -version; javac -version; mvn -v; gradle --version; \
     git --version; git lfs version; \
     jq --version; yq --version; uv --version; \
