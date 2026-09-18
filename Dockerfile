@@ -251,6 +251,11 @@ RUN set -eux; \
 #
 # Debian bookworm 的 yq 是 **3.1.0**，那是 Python 版、语法和 mikefarah v4
 # 完全不同（`yq -y` vs `yq -o=yaml`）。装错了比不装更坑，所以取官方 v4。
+#
+# 校验和不能按列取：yq 的 checksums 文件不是 `<hash>  <file>`，而是
+#     <file>  <crc32>  <md5>  <sha1>  …  <sha256>  …  <sha512>
+# 一行一个文件、八种算法并排。所以反过来做 —— 自己算出 sha256，再看它是否
+# 出现在官方为该文件声明的那一行里。
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
@@ -261,10 +266,11 @@ RUN set -eux; \
     esac; \
     base="https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}"; \
     curl -fsSL -o /usr/local/bin/yq "${base}/yq_linux_${yq_arch}"; \
-    sum="$(curl -fsSL "${base}/checksums" | grep " yq_linux_${yq_arch}\$" | awk '{print $1}')"; \
-    [ -n "$sum" ] || { echo "no checksum for yq_linux_${yq_arch}" >&2; exit 1; }; \
-    echo "${sum}  /usr/local/bin/yq" | sha256sum -c -; \
     chmod 0755 /usr/local/bin/yq; \
+    line="$(curl -fsSL "${base}/checksums" | grep -E "^yq_linux_${yq_arch}[[:space:]]")"; \
+    [ -n "$line" ] || { echo "no checksums entry for yq_linux_${yq_arch}" >&2; exit 1; }; \
+    actual="$(sha256sum /usr/local/bin/yq | awk '{print $1}')"; \
+    echo "$line" | grep -qF "$actual" || { echo "sha256 mismatch for yq_linux_${yq_arch}" >&2; exit 1; }; \
     yq --version
 
 # -----------------------------------------------------------------------------
