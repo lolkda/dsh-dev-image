@@ -1,0 +1,90 @@
+# =============================================================================
+#  实测 /app 单挂载点布局是否成立
+#
+#  这个 workflow 存在的理由：改 CARGO_HOME / DSH_HOME / GOPATH 到 /app 之后，
+#  有几个行为我没法在本机验证（本机没有 docker，也没有 rust）：
+#
+#    1. rustup 的 cargo/clippy/rustfmt 都是代理（hardlink 到 rustup），
+#       CARGO_HOME 指向别处时它们还能不能找到工具链？
+#    2. 空目录下 dsh plugin add 能否自己初始化 profile？（本机已实测可以）
+#    3. 挂载卷遮蔽 /app 之后，entrypoint 的 mkdir 能否补回来？
+#    4. python 的 sqlite3 / ssl / ctypes 在 /app 布局下是否正常？
+#
+#  所以直接拿【已发布的真实镜像】跑，而不是靠推理。
+# =============================================================================
+name: verify-layout
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/verify-layout.yml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 用新布局跑真实镜像
+        run: |
+          set -eux
+          IMG=ghcr.io/lolkda/dsh-dev-image:latest
+          docker pull "$IMG"
+
+          # 模拟 compose 的单挂载点：一个空宿主目录挂到 /app，
+          # 卷会遮蔽镜像里的 /app，然后靠 entrypoint 补建子目录。
+          HOSTDIR="$(mktemp -d)"
+          chmod 777 "$HOSTDIR"
+
+          echo "########## 1. 卷遮蔽 /app 后能否补建目录 ##########"
+          docker run --rm \
+            -v "$HOSTDIR":/app \
+            -e CARGO_HOME=/app/.cache/cargo \
+            -e DSH_HOME=/app/.dsh \
+            -e GOPATH=/app/.cache/go \
+            -e GOMODCACHE=/app/.cache/go/pkg/mod \
+            -e GOCACHE=/app/.cache/go/build \
+            -e PIP_CACHE_DIR=/app/.cache/pip \
+            -e npm_config_cache=/app/.cache/npm \
+            -e MAVEN_CONFIG=/app/.cache/m2 \
+            -e GRADLE_USER_HOME=/app/.cache/gradle \
+            -e UV_CACHE_DIR=/app/.cache/uv \
+            "$IMG" bash -lc '
+              mkdir -p /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build \
+                       /app/.cache/pip /app/.cache/npm /app/.cache/m2 \
+                       /app/.cache/gradle /app/.cache/uv /app/.dsh
+              echo "--- 关键问题 1: 改 CARGO_HOME 后 cargo 还能用吗 ---"
+              echo "CARGO_HOME=$CARGO_HOME"
+              cargo -V
+              rustc -V
+              cargo clippy -V
+              rustfmt --version
+              echo "--- 关键问题 1b: cargo 真的能编译吗（不只是打印版本）---"
+              cd /tmp && cargo new hello --quiet && cd hello
+              cargo build --quiet 2>&1 | tail -5
+              ./target/debug/hello
+              echo "--- 关键问题 1c: 构建产物落在哪 ---"
+              ls -d /app/.cache/cargo/* 2>/dev/null || echo "(CARGO_HOME 下暂时为空，正常)"
+              echo "--- 关键问题 2: 空 DSH_HOME 能否初始化 profile 并装插件 ---"
+              dsh plugin --profile web add @lolkda/dsh-web-lan@^0.1.0 2>&1 | tail -8
+              ls -la /app/.dsh/profiles/web/package.json
+              echo "--- 关键问题 4: python 的 C 扩展模块 ---"
+              python -c "import sqlite3, ssl, ctypes, lzma, bz2, readline; print(\"python ext ok\", sqlite3.sqlite_version)"
+              echo "--- 其余工具链 ---"
+              python -V; node -v; go version; java -version 2>&1 | head -1
+              mvn -v 2>&1 | head -1; gradle --version 2>&1 | grep -i '^Gradle'
+              jq --version; yq --version; uv --version; rg --version | head -1
+              echo "=== LAYOUT VERIFY OK ==="
+            '
+
+          echo "########## 2. 宿主目录里实际落下了什么 ##########"
+          find "$HOSTDIR" -maxdepth 3 | head -30
+
+          echo "########## 3. 容器内 /app 之外是否还有写入口 ##########"
+          docker run --rm "$IMG" bash -lc '
+            echo "WORKDIR: $(pwd)"
+            echo "--- 挂载点 ---"; mount | grep -E "^/dev" | head -10
+            echo "--- /app 默认内容 ---"; ls -la /app
+          '
