@@ -73,6 +73,10 @@ services:
       # 容器的 PID namespace 是独立的，所以它只能 trace 容器自己的进程，
       # 摸不到宿主进程（经典风险是 CAP_SYS_PTRACE + --pid=host，这里没有）。
       - SYS_PTRACE
+      # entrypoint 的 root 阶段要用（见 compose.yml 里的详细说明）
+      - CHOWN
+      - SETUID
+      - SETGID
 
     logging:
       driver: json-file

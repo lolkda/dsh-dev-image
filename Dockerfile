@@ -359,11 +359,31 @@ RUN set -eux; \
     mkdir -p /app/.dsh \
              /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build \
              /app/.cache/pip /app/.cache/npm /app/.cache/m2 \
-             /app/.cache/gradle /app/.cache/uv; \
+             /app/.cache/gradle /app/.cache/uv /app/.cache/pnpm-store; \
     chown -R agent:agent /app /usr/local; \
     git config --system --add safe.directory '*'; \
     git config --system core.autocrlf false; \
     git config --system init.defaultBranch main
+
+# -----------------------------------------------------------------------------
+# pnpm store 放进 /app
+#
+# 为什么：dsh 的插件装在 $DSH_HOME/profiles/<name>/node_modules，也就是
+# /app/.dsh/... 里。如果 store 留在默认的 /home/agent/.local/share/pnpm/store
+# （镜像层），store 和 node_modules 就【跨文件系统】了 —— pnpm 的硬链接会
+# 退化成整份复制，白占空间还慢。放同一文件系统下才是它设计的样子。
+#
+# 注意 pnpm 12 的配置方式跟 npm 不一样，实测确认过：
+#     .npmrc 里的 store-dir          → 无效
+#     npm_config_store_dir 环境变量  → 无效
+#     --store-dir CLI 参数           → 有效
+#     $XDG_CONFIG_HOME/pnpm/config.yaml 里的 storeDir 键  → 有效 ← 用这个
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    mkdir -p /home/agent/.config/pnpm; \
+    printf 'storeDir: /app/.cache/pnpm-store\n' > /home/agent/.config/pnpm/config.yaml; \
+    chown -R agent:agent /home/agent/.config; \
+    cat /home/agent/.config/pnpm/config.yaml
 
 # -----------------------------------------------------------------------------
 # DeepSeek Harness + pnpm
@@ -411,12 +431,17 @@ RUN set -eux; \
 # 为什么不在 build 期登记，见 entrypoint.sh 头部注释（$DSH_HOME 是卷，会遮蔽）。
 # -----------------------------------------------------------------------------
 COPY entrypoint.sh /usr/local/bin/dsh-entrypoint
-RUN chmod 0755 /usr/local/bin/dsh-entrypoint
+RUN set -eux; \
+    chmod 0755 /usr/local/bin/dsh-entrypoint; \
+    bash -n /usr/local/bin/dsh-entrypoint; \
+    for c in setpriv usermod groupmod stat; do \
+        command -v "$c" >/dev/null || { echo "entrypoint 依赖缺失: $c" >&2; exit 1; }; \
+    done
 
 # -----------------------------------------------------------------------------
 # 默认行为：直接起 Web GUI
 #
-# 这两行放在文件最末尾是刻意的：ENV / CMD 会让其后的所有层缓存失效，放最后
+# 这几行放在文件最末尾是刻意的：ENV / CMD 会让其后的所有层缓存失效，放最后
 # 就只重跑这几层，前面那些大下载（JDK / Go / Gradle / rust 组件）全部命中缓存。
 #
 # DSH_PLUGINS 给默认值，是为了让裸 `docker run` 不带 -e 也能用。不给的话
@@ -425,11 +450,16 @@ RUN chmod 0755 /usr/local/bin/dsh-entrypoint
 #
 # CMD 设成 dsh web，所以 `docker run <image>` 开箱即用；要 shell 就
 # `docker run -it <image> bash`（参数会覆盖 CMD）。
+#
+# 【刻意不写 USER agent】—— 入口需要先以 root 跑，才能把挂载进来的 /app
+# 交给 agent 并降权（见 entrypoint.sh 头部注释）。真正的进程在 setpriv
+# 降权之后才启动，跑起来仍是 UID 1000 的 agent，不是 root。
+# 代价是 `docker exec` 进去默认也是 root；要 agent 身份就：
+#     docker compose exec --user agent agent bash
 # -----------------------------------------------------------------------------
 ENV DSH_PLUGINS=@lolkda/dsh-web-lan@^0.1.0
 
 WORKDIR /app
-USER agent
 EXPOSE 3080
 ENTRYPOINT ["/usr/local/bin/dsh-entrypoint"]
 CMD ["dsh", "web"]

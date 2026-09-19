@@ -98,6 +98,16 @@ services:
       # 容器的 PID namespace 是独立的，所以它只能 trace 容器自己的进程，
       # 摸不到宿主进程（经典风险是 CAP_SYS_PTRACE + --pid=host，这里没有）。
       - SYS_PTRACE
+      # 下面三个是 entrypoint 的 root 阶段要用的，缺了容器起不来：
+      #   CHOWN   把挂载进来的 /app 交给 agent
+      #   SETUID  降权到 agent
+      #   SETGID  同上（含补充组）
+      # 原因：/app 是宿主目录，目录不存在时 Docker 会以 root:root 创建它，
+      # 容器内 UID 1000 的 agent 连 mkdir /app/.dsh 都做不到（EACCES）。
+      # setpriv 降权成功后进程就不再持有它们；其余能力仍全部丢弃。
+      - CHOWN
+      - SETUID
+      - SETGID
 
     # 日志上限，否则 agent 的长输出会把磁盘写满
     logging:

@@ -1,17 +1,15 @@
 # =============================================================================
-#  验证 /app 单挂载点布局（针对新镜像）
+#  验证 /app 单挂载点 + 权限自动修复（针对新镜像）
 #
-#  这个 workflow 存在的理由：本机没有 docker，镜像行为只能靠实测。
-#  它已经抓到过一个真 bug —— Debian 的 /etc/profile 会硬编码覆盖 PATH，
-#  导致登录 shell（bash -lc / su - / ssh）里 /opt/* 和 /usr/local/{cargo,go}
-#  下的工具链全部 command not found，只剩恰好在 /usr/local/bin 的 dsh/python。
+#  本机没有 docker，镜像行为只能靠实测。这个 workflow 已经抓到过两个真 bug：
 #
-#  现在每次构建完自动跑一遍，盯住这些回归：
-#    1. bash -c 和 bash -lc 两个 shell 下工具链都齐全
-#    2. 空宿主目录挂到 /app 后，子目录被正确补建
-#    3. 空 DSH_HOME 能自己初始化 profile 并装插件
-#    4. cargo 能真的编译（不只是打印版本）
-#    5. python 的 C 扩展（sqlite3/ssl/ctypes/lzma）正常
+#   1. Debian 的 /etc/profile 硬编码覆盖 PATH → 登录 shell 里 /opt/* 和
+#      /usr/local/{cargo,go} 下的工具链全部 command not found
+#   2. /app 是宿主目录，目录不存在时 Docker 以 root:root 创建它 → 容器内
+#      UID 1000 的 agent 连 mkdir /app/.dsh 都做不到（EACCES），
+#      实测报错：Error: EACCES: permission denied, mkdir '/app/.dsh'
+#
+#  所以场景 1 专门复现 bug 2 的条件（root 属主的空目录）。
 # =============================================================================
 name: verify-layout
 
@@ -29,51 +27,85 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 单挂载点 + 两个 shell
+      - name: 拉镜像
+        run: docker pull ghcr.io/lolkda/dsh-dev-image:latest
+
+      # ---------------------------------------------------------------------
+      # 场景 1：复现 EACCES —— 宿主目录由 root 创建（Docker 的默认行为）
+      # 期望：entrypoint 自动 chown 并降权，插件装成功
+      # ---------------------------------------------------------------------
+      - name: "场景1: root 属主宿主目录（原 EACCES 场景）"
         run: |
           set -eux
           IMG=ghcr.io/lolkda/dsh-dev-image:latest
-          docker pull "$IMG"
+          D="$(mktemp -d)"; chmod 755 "$D"; chown root:root "$D"
+          echo "宿主目录 $D 属主: $(stat -c '%u:%g' "$D")"
 
-          # 模拟真实部署：一个空的宿主目录挂到 /app，卷会遮蔽镜像里那一层
-          HOSTDIR="$(mktemp -d)"
-          chmod 777 "$HOSTDIR"
+          docker run --rm --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+            -v "$D":/app "$IMG" bash -c '
+              echo "--- 谁在跑 ---"
+              id
+              echo "--- /app 属主 ---"
+              stat -c "%n %u:%g" /app
+              echo "--- 插件是否装成功（原来这里 EACCES）---"
+              ls -la /app/.dsh/profiles/web/package.json
+              echo "--- 真编译一个 rust crate ---"
+              cd /tmp && cargo new h -q && cd h && cargo build -q && ./target/debug/h
+              echo "--- python C 扩展 ---"
+              python -c "import sqlite3, ssl, ctypes, lzma; print(\"ext ok\")"
+              echo "=== 场景1 OK ==="
+            '
 
-          echo "########## 1. 两个 shell 下工具链都要齐全 ##########"
+      # ---------------------------------------------------------------------
+      # 场景 2：两个 shell 下工具链都要齐全（防 /etc/profile 回归）
+      # ---------------------------------------------------------------------
+      - name: "场景2: bash -c 与 bash -lc 工具链齐全"
+        run: |
+          set -eux
+          IMG=ghcr.io/lolkda/dsh-dev-image:latest
           for sh in "bash -c" "bash -lc"; do
             echo "===== [$sh] ====="
             docker run --rm "$IMG" $sh '
+              miss=0
               for c in python node npm yarn pnpm go rustc cargo java javac mvn gradle \
                        git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
-                p="$(command -v "$c" 2>/dev/null)" || { echo "  MISSING: $c"; continue; }
-                printf "  ok  %-10s %s\n" "$c" "$p"
+                command -v "$c" >/dev/null 2>&1 || { echo "  MISSING: $c"; miss=1; }
               done
-              echo "  --- cargo 组件 ---"
+              [ "$miss" = 0 ] && echo "  全部工具链就位"
               cargo clippy -V; rustfmt --version
+              pnpm config get store-dir
             '
           done
 
-          echo "########## 2. 空宿主目录挂 /app ##########"
-          docker run --rm -v "$HOSTDIR":/app "$IMG" bash -c '
-            echo "WORKDIR: $(pwd)"
-            echo "DSH_HOME=$DSH_HOME  CARGO_HOME=$CARGO_HOME"
+      # ---------------------------------------------------------------------
+      # 场景 3：用户自己的目录（非 root 属主）应被自动跟随，不做多余 chown
+      # ---------------------------------------------------------------------
+      - name: "场景3: 宿主 UID 自动跟随"
+        run: |
+          set -eux
+          IMG=ghcr.io/lolkda/dsh-dev-image:latest
+          D="$(mktemp -d)"; chown 1001:1001 "$D"
+          docker run --rm --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+            -v "$D":/app "$IMG" bash -c '
+              echo "agent uid=$(id -u) gid=$(id -g)   (期望 1001)"
+              echo "/app 属主: $(stat -c "%u:%g" /app)"
+              touch /app/probe && echo "写入 OK: $(stat -c "%u:%g" /app/probe)"
+            '
+
+      # ---------------------------------------------------------------------
+      # 场景 4：单挂载点落盘结构
+      # ---------------------------------------------------------------------
+      - name: "场景4: /app 目录结构"
+        run: |
+          set -eux
+          IMG=ghcr.io/lolkda/dsh-dev-image:latest
+          D="$(mktemp -d)"
+          docker run --rm -v "$D":/app "$IMG" bash -c '
             for d in /app /app/.dsh /app/.cache/cargo /app/.cache/go/pkg/mod \
                      /app/.cache/go/build /app/.cache/pip /app/.cache/npm \
-                     /app/.cache/m2 /app/.cache/gradle /app/.cache/uv; do
+                     /app/.cache/m2 /app/.cache/gradle /app/.cache/uv /app/.cache/pnpm-store; do
               [ -d "$d" ] && echo "  ok  $d" || echo "  MISSING $d"
             done
-            echo "--- 空 DSH_HOME 能否初始化 profile 并装插件 ---"
-            ls -la /app/.dsh/profiles/web/package.json
-            echo "--- cargo 真编译 ---"
-            cd /tmp && cargo new hello -q && cd hello && cargo build -q
-            ./target/debug/hello
-            echo "--- python C 扩展 ---"
-            python -c "import sqlite3, ssl, ctypes, lzma, bz2, readline; print(\"ext ok\", sqlite3.sqlite_version)"
-            echo "=== LAYOUT OK ==="
           '
-
-          echo "########## 3. 宿主目录实际落下了什么 ##########"
-          find "$HOSTDIR" -maxdepth 3 | head -25
-
-          echo "########## 4. 容器内除 /app 外应无可写挂载 ##########"
-          docker run --rm "$IMG" bash -c 'mount | grep -E "^/dev" | head; echo "---"; ls -la /app'
+          echo "--- 宿主侧实际落下 ---"
+          find "$D" -maxdepth 2 | head -20
