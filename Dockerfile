@@ -343,8 +343,23 @@ RUN set -eux; \
 COPY entrypoint.sh /usr/local/bin/dsh-entrypoint
 RUN chmod 0755 /usr/local/bin/dsh-entrypoint
 
+# -----------------------------------------------------------------------------
+# 默认行为：直接起 Web GUI
+#
+# 这两行放在文件最末尾是刻意的：ENV / CMD 会让其后的所有层缓存失效，放最后
+# 就只重跑这几层，前面那些大下载（JDK / Go / Gradle / rust 组件）全部命中缓存。
+#
+# DSH_PLUGINS 给默认值，是为了让裸 `docker run` 不带 -e 也能用。不给的话
+# entrypoint 会跳过插件登记，dsh 就绑 127.0.0.1，外面完全连不上 —— 典型的
+# "看起来起来了但用不了"。想关掉就显式 `-e DSH_PLUGINS=`（空值会被尊重）。
+#
+# CMD 设成 dsh web，所以 `docker run <image>` 开箱即用；要 shell 就
+# `docker run -it <image> bash`（参数会覆盖 CMD）。
+# -----------------------------------------------------------------------------
+ENV DSH_PLUGINS=@lolkda/dsh-web-lan@^0.1.0
+
 WORKDIR /workspace
 USER agent
 EXPOSE 3080
 ENTRYPOINT ["/usr/local/bin/dsh-entrypoint"]
-CMD ["/bin/bash"]
+CMD ["dsh", "web"]

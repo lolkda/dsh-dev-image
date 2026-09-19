@@ -56,19 +56,35 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 
 ## 部署
 
+### 最短路径：直接跑镜像
+
 ```bash
-# 1. 拿文件
+mkdir -p /srv/agent/workspace
+docker run -d --name dsh-agent --restart unless-stopped --network host \
+  -v /srv/agent/workspace:/workspace \
+  -v dsh-agent-home:/home/agent/.dsh \
+  ghcr.io/lolkda/dsh-dev-image:latest
+```
+
+然后浏览器开 `http://<宿主机IP>:3080`。
+
+`DSH_PLUGINS` 默认值和 `CMD` 都已经烤进镜像，所以**不需要 `-e`，也不用写 `dsh web`**。
+
+> `--network host` 不能加 `-p`（会警告且无效）。
+> 挂载目录属主必须是 1000：容器里跑的是 UID 1000 的 `agent` 用户。
+
+### 用 compose：多了资源限制和日志上限
+
+服务器上还跑着别的服务时建议用这个（`cpus` / `mem_limit` / `pids_limit` / 日志上限 / `cap_drop`）。
+
+```bash
 git clone https://github.com/lolkda/dsh-dev-image.git
 cd dsh-dev-image
 
-# 2. 准备挂载目录（默认挂 /srv/agent/workspace，可用 AGENT_WORKSPACE 改）
-mkdir -p /srv/agent/workspace
+mkdir -p /srv/agent/workspace   # 默认挂这里，可用 AGENT_WORKSPACE 改
 
-# 3. 起（自动拉镜像）
 docker compose up -d
-
-# 4. 看日志，确认插件装上了
-docker compose logs -f
+docker compose logs -f          # 第一次会装插件，等几秒
 ```
 
 然后浏览器直接开：
