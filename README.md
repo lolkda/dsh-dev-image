@@ -59,7 +59,7 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 ### 最短路径：直接跑镜像
 
 ```bash
-mkdir -p /srv/agent && chown 1000:1000 /srv/agent
+mkdir -p /srv/agent
 docker run -d --name dsh-agent --restart unless-stopped --network host \
   -v /srv/agent:/app \
   ghcr.io/lolkda/dsh-dev-image:latest
@@ -70,7 +70,7 @@ docker run -d --name dsh-agent --restart unless-stopped --network host \
 `DSH_PLUGINS` 默认值和 `CMD` 都已经烤进镜像，所以**不需要 `-e`，也不用写 `dsh web`**。
 
 > `--network host` 不能加 `-p`（会警告且无效）。
-> 挂载目录属主必须是 1000：容器里跑的是 UID 1000 的 `agent` 用户。
+> 宿主目录**不需要**预先 chown，入口会自动处理（见下面「权限」一节）。
 
 ### 用 compose：多了资源限制和日志上限
 
@@ -80,7 +80,7 @@ docker run -d --name dsh-agent --restart unless-stopped --network host \
 git clone https://github.com/lolkda/dsh-dev-image.git
 cd dsh-dev-image
 
-mkdir -p /srv/agent && chown 1000:1000 /srv/agent   # 默认挂这里，可用 AGENT_HOME 改
+mkdir -p /srv/agent   # 默认挂这里，可用 AGENT_HOME 改
 
 docker compose up -d
 docker compose logs -f          # 第一次会装插件，等几秒
@@ -102,6 +102,40 @@ docker compose logs -f          # 第一次会装插件，等几秒
 - **删容器** = 镜像层全部还原，你的东西一个不动
 
 工具链本体（rustup 工具链、JDK、Go、Maven、Gradle）留在镜像内的 `/usr/local` 和 `/opt`，不占用挂载点 —— 它们不需要持久化，重建镜像本来就该换新的。
+
+### 权限：为什么不需要你先 chown
+
+**你可能会撞上的报错：**
+
+```
+Error: EACCES: permission denied, mkdir '/app/.dsh'
+dsh-entrypoint: FATAL 插件安装失败: @lolkda/dsh-web-lan@^0.1.0
+```
+
+原因：`/app` 是宿主目录挂进来的，而**目录不存在时 Docker 会以 `root:root` 创建它**，容器内 UID 1000 的 `agent` 连建子目录都做不到。
+
+镜像的处理方式（和 postgres / mysql / grafana 官方镜像同一套）：
+
+```
+入口以 root 起 → 把 /app 交给运行用户 → setpriv 降权 exec
+```
+
+- 降权后进程**不再持有任何 capability**，跑起来仍是 UID 1000 的 `agent`，不是 root
+- `cap_drop: ALL` 会让 root 也失去 `chown`/`setuid`，所以 compose 补回了三个：`CHOWN`、`SETUID`、`SETGID`。其余仍全部丢弃，比 Docker 默认紧得多
+- 只在 `/app` 对 `agent` 不可写时才做递归 chown，之后重启直接跳过（不会每次扫全树）
+
+**UID 自动跟随**：`/app` 已经属于某个非 root 用户时（比如你挂的是自己的工程目录），`agent` 直接采用那个 UID/GID，零配置可用，它建出来的文件在宿主上就归你自己，不需要 sudo 才能改。
+
+想显式指定就加环境变量：
+
+```yaml
+environment:
+  AGENT_UID: "1001"
+  AGENT_GID: "1001"
+```
+
+> 代价：`docker exec` 进去默认是 root（因为入口需要 root 起）。
+> 要 agent 身份：`docker compose exec --user agent agent bash`
 
 然后浏览器直接开：
 
