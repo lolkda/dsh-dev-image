@@ -1,0 +1,68 @@
+# =============================================================================
+#  受控实验：隔离「CARGO_HOME 改路径」和「登录 shell 丢 PATH」两个变量
+#
+#  上一轮同时改了两件事，结果 cargo 找不到，无法判断是哪个原因。
+#  这次一次只动一个变量：
+#
+#    A. bash -c  (非登录，ENV PATH 生效) + CARGO_HOME 默认  → 基线
+#    B. bash -c  (非登录，ENV PATH 生效) + CARGO_HOME 改到 /app  → 只改 CARGO_HOME
+#    C. bash -lc (登录) + CARGO_HOME 默认  → 只改 shell 类型
+#    D. 打印 /etc/profile，看它是否覆盖 PATH
+# =============================================================================
+name: verify-path
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/verify-path.yml"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 受控实验
+        run: |
+          IMG=ghcr.io/lolkda/dsh-dev-image:latest
+          docker pull "$IMG"
+
+          echo "########## D. /etc/profile 是否覆盖 PATH ##########"
+          docker run --rm "$IMG" bash -c 'grep -nB2 -A8 "^PATH=" /etc/profile || cat /etc/profile'
+
+          echo
+          echo "########## A. 基线：bash -c + 默认 CARGO_HOME ##########"
+          docker run --rm "$IMG" bash -c '
+            echo "PATH=$PATH"
+            for c in cargo rustc go java mvn gradle dsh python; do
+              printf "  %-8s -> %s\n" "$c" "$(command -v $c || echo MISSING)"
+            done
+          '
+
+          echo
+          echo "########## B. 只改 CARGO_HOME（仍用 bash -c）##########"
+          docker run --rm -e CARGO_HOME=/app/.cache/cargo "$IMG" bash -c '
+            mkdir -p /app/.cache/cargo
+            echo "CARGO_HOME=$CARGO_HOME"
+            echo "  cargo  -> $(command -v cargo || echo MISSING)"
+            cargo -V
+            cd /tmp && cargo new hello -q && cd hello && cargo build -q 2>&1 | tail -3
+            ./target/debug/hello
+            echo "  产物位置: $(ls -d /app/.cache/cargo/* 2>/dev/null | head -3)"
+          '
+
+          echo
+          echo "########## C. 只改 shell 类型（bash -lc，CARGO_HOME 默认）##########"
+          docker run --rm "$IMG" bash -lc '
+            echo "PATH=$PATH"
+            for c in cargo rustc go java mvn gradle dsh python; do
+              printf "  %-8s -> %s\n" "$c" "$(command -v $c || echo MISSING)"
+            done
+          '
+
+          echo
+          echo "########## E. 登录 shell 下 python 扩展 / dsh 是否仍可用 ##########"
+          docker run --rm "$IMG" bash -lc '
+            python -c "import sqlite3, ssl; print(\"python ext ok\")" || echo "python FAIL"
+            dsh --version || echo "dsh FAIL"
+          '
