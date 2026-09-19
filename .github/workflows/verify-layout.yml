@@ -1,111 +1,45 @@
-# =============================================================================
-#  验证 /app 单挂载点 + 权限自动修复（针对新镜像）
-#
-#  本机没有 docker，镜像行为只能靠实测。这个 workflow 已经抓到过两个真 bug：
-#
-#   1. Debian 的 /etc/profile 硬编码覆盖 PATH → 登录 shell 里 /opt/* 和
-#      /usr/local/{cargo,go} 下的工具链全部 command not found
-#   2. /app 是宿主目录，目录不存在时 Docker 以 root:root 创建它 → 容器内
-#      UID 1000 的 agent 连 mkdir /app/.dsh 都做不到（EACCES），
-#      实测报错：Error: EACCES: permission denied, mkdir '/app/.dsh'
-#
-#  所以场景 1 专门复现 bug 2 的条件（root 属主的空目录）。
-# =============================================================================
+# 快速前置检查：始终测试当前 checkout 的入口，不拉取旧 latest 冒充当前产物。
 name: verify-layout
 
 on:
+  workflow_call:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["build-and-publish"]
-    types: [completed]
+
+permissions:
+  contents: read
 
 jobs:
   verify:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
-      - name: 拉镜像
-        run: docker pull ghcr.io/lolkda/dsh-dev-image:latest
-
-      # ---------------------------------------------------------------------
-      # 场景 1：复现 EACCES —— 宿主目录由 root 创建（Docker 的默认行为）
-      # 期望：entrypoint 自动 chown 并降权，插件装成功
-      # ---------------------------------------------------------------------
-      - name: "场景1: root 属主宿主目录（原 EACCES 场景）"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Shell syntax and lint
         run: |
-          set -eux
-          IMG=ghcr.io/lolkda/dsh-dev-image:latest
-          D="$(mktemp -d)"; chmod 755 "$D"; chown root:root "$D"
-          echo "宿主目录 $D 属主: $(stat -c '%u:%g' "$D")"
-
-          docker run --rm --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
-            -v "$D":/app "$IMG" bash -c '
-              echo "--- 谁在跑 ---"
-              id
-              echo "--- /app 属主 ---"
-              stat -c "%n %u:%g" /app
-              echo "--- 插件是否装成功（原来这里 EACCES）---"
-              ls -la /app/.dsh/profiles/web/package.json
-              echo "--- 真编译一个 rust crate ---"
-              cd /tmp && cargo new h -q && cd h && cargo build -q && ./target/debug/h
-              echo "--- python C 扩展 ---"
-              python -c "import sqlite3, ssl, ctypes, lzma; print(\"ext ok\")"
-              echo "=== 场景1 OK ==="
-            '
-
-      # ---------------------------------------------------------------------
-      # 场景 2：两个 shell 下工具链都要齐全（防 /etc/profile 回归）
-      # ---------------------------------------------------------------------
-      - name: "场景2: bash -c 与 bash -lc 工具链齐全"
+          for file in entrypoint.sh tests/*.sh; do bash -n "$file"; done
+          shellcheck entrypoint.sh tests/*.sh
+      - name: Portable CLI and configuration regression tests
         run: |
-          set -eux
-          IMG=ghcr.io/lolkda/dsh-dev-image:latest
-          for sh in "bash -c" "bash -lc"; do
-            echo "===== [$sh] ====="
-            docker run --rm "$IMG" $sh '
-              miss=0
-              for c in python node npm yarn pnpm go rustc cargo java javac mvn gradle \
-                       git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
-                command -v "$c" >/dev/null 2>&1 || { echo "  MISSING: $c"; miss=1; }
-              done
-              [ "$miss" = 0 ] && echo "  全部工具链就位"
-              cargo clippy -V; rustfmt --version
-              pnpm config get store-dir
-            '
-          done
-
-      # ---------------------------------------------------------------------
-      # 场景 3：用户自己的目录（非 root 属主）应被自动跟随，不做多余 chown
-      # ---------------------------------------------------------------------
-      - name: "场景3: 宿主 UID 自动跟随"
+          bash tests/entrypoint.test.sh
+          node --test tests/config.test.mjs
+      - name: Validate both Compose adapters
         run: |
-          set -eux
-          IMG=ghcr.io/lolkda/dsh-dev-image:latest
-          D="$(mktemp -d)"; chown 1001:1001 "$D"
-          docker run --rm --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
-            -v "$D":/app "$IMG" bash -c '
-              echo "agent uid=$(id -u) gid=$(id -g)   (期望 1001)"
-              echo "/app 属主: $(stat -c "%u:%g" /app)"
-              touch /app/probe && echo "写入 OK: $(stat -c "%u:%g" /app/probe)"
-            '
-
-      # ---------------------------------------------------------------------
-      # 场景 4：单挂载点落盘结构
-      # ---------------------------------------------------------------------
-      - name: "场景4: /app 目录结构"
-        run: |
-          set -eux
-          IMG=ghcr.io/lolkda/dsh-dev-image:latest
-          D="$(mktemp -d)"
-          docker run --rm -v "$D":/app "$IMG" bash -c '
-            for d in /app /app/.dsh /app/.cache/cargo /app/.cache/go/pkg/mod \
-                     /app/.cache/go/build /app/.cache/pip /app/.cache/npm \
-                     /app/.cache/m2 /app/.cache/gradle /app/.cache/uv /app/.cache/pnpm-store; do
-              [ -d "$d" ] && echo "  ok  $d" || echo "  MISSING $d"
-            done
-          '
-          echo "--- 宿主侧实际落下 ---"
-          find "$D" -maxdepth 2 | head -20
+          docker compose -f compose.yml config --quiet
+          docker compose -f compose.bridge.yml config --quiet
+          DSH_PLUGINS='' docker compose -f compose.yml config --format json | jq -e '.services.agent.environment.DSH_PLUGINS == ""'
+          DSH_PLUGINS='' docker compose -f compose.bridge.yml config --format json | jq -e '.services.agent.environment.DSH_PLUGINS == ""'
+      - uses: docker/setup-buildx-action@v3
+      - name: Build lightweight entrypoint test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/Dockerfile
+          load: true
+          tags: dsh-entrypoint-test:ci
+          cache-from: type=gha,scope=entrypoint-tests
+          cache-to: type=gha,scope=entrypoint-tests,mode=max
+      - name: Real Linux permissions under minimal capabilities
+        run: bash tests/container-runtime.sh dsh-entrypoint-test:ci

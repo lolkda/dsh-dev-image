@@ -87,8 +87,8 @@ RUN set -eux; \
 # 环境变量
 # 放在 COPY 之前，这样每条 COPY 后面能立刻冒烟验证。
 # -----------------------------------------------------------------------------
-# 一切可写状态都落在 /app 下 —— 它是唯一的挂载点，所以"其他的一概不外露"：
-# 容器里除了 /app，别的都是只读的镜像内容，重建即还原。
+# 工作区和受管状态统一落在 /app，它是唯一的持久化挂载点。
+# 其他路径仍是容器可写层（不是只读文件系统），重建容器后丢弃。
 #
 #   /app                 ← 工作区（WORKDIR，也是唯一挂载点）
 #   /app/.dsh            ← DSH_HOME：profile、插件、凭证、日志
@@ -152,16 +152,7 @@ RUN set -eux; \
         'done' \
         'export PATH' \
         > /etc/profile.d/00-dsh-path.sh; \
-    chmod 0644 /etc/profile.d/00-dsh-path.sh; \
-    printf '%s\n' \
-        '#!/bin/sh' \
-        '# 登录 shell 下 /app 若尚未存在（卷首次挂载），补建可写子树。' \
-        'for d in /app /app/.dsh /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build /app/.cache/pip /app/.cache/npm /app/.cache/m2 /app/.cache/gradle /app/.cache/uv; do' \
-        '    [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true' \
-        'done' \
-        > /etc/profile.d/01-dsh-app-dirs.sh; \
-    chmod 0644 /etc/profile.d/01-dsh-app-dirs.sh; \
-    ls -la /etc/profile.d/
+    chmod 0644 /etc/profile.d/00-dsh-path.sh
 
 # -----------------------------------------------------------------------------
 # Node 24
@@ -182,8 +173,8 @@ RUN set -eux; node -v; npm -v; yarn --version
 # -----------------------------------------------------------------------------
 # Rust 1.98
 #
-# RUSTUP_HOME 放镜像内（工具链本体），CARGO_HOME 也放镜像内；compose 只把
-# CARGO_HOME/registry 挂成卷，这样工具链不丢、依赖缓存可复用。
+# RUSTUP_HOME 和代理程序留在镜像内，CARGO_HOME 指向 /app/.cache/cargo。
+# 单挂载点持久化 registry 缓存与 cargo install 产物，不遮蔽镜像工具链。
 #
 # clippy / rustfmt 必须单独加：官方 slim 镜像是 minimal profile，只有
 # rustc / cargo / rust-std，没有这两个。对 agent 来说 cargo clippy 和
@@ -252,6 +243,10 @@ RUN set -eux; \
     echo "$(cat /tmp/maven.tgz.sha512)  /tmp/maven.tgz" | sha512sum -c -; \
     mkdir -p /opt/maven; \
     tar -xzf /tmp/maven.tgz -C /opt/maven --strip-components=1; \
+    printf '%s\n' \
+        '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">' \
+        '  <localRepository>${env.MAVEN_CONFIG}/repository</localRepository>' \
+        '</settings>' > /opt/maven/conf/settings.xml; \
     rm -f /tmp/maven.tgz /tmp/maven.tgz.sha512; \
     mvn -v
 
@@ -348,7 +343,7 @@ RUN set -eux; ln -sfn /usr/bin/fdfind /usr/local/bin/fd; fd --version
 # （rust 那两个目录已单独 a+w，不受影响）。
 #
 # /app 是唯一挂载点。挂载会遮蔽镜像里这一层，所以 entrypoint 在启动时
-# 补建子目录（卷首次挂载时是空的），profile.d 脚本则在登录 shell 里兜底。
+# 在降权后补建子目录（卷首次挂载时是空的）；登录 shell 只负责恢复 PATH。
 #
 # git safe.directory 必设：挂载进来的目录属主和容器内 UID 不一致时，
 # git 会直接拒绝操作（"detected dubious ownership"）。
@@ -408,9 +403,10 @@ RUN set -eux; \
 # （那条路正是之前丢 PATH 的路径，profile.d 的修复必须在这里被验证到）。
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-    for sh in "bash -c" "bash -lc"; do \
+    for sh in "bash -ec" "bash -lec"; do \
         echo "=== 用 [$sh] 验证 ==="; \
-        $sh 'python -V; \
+        $sh 'set -euo pipefail; \
+              python -V; \
              node -v; npm -v; yarn --version; pnpm --version; \
              go version; \
              rustc -V; cargo -V; cargo clippy -V; rustfmt --version; \
@@ -457,7 +453,8 @@ RUN set -eux; \
 # 代价是 `docker exec` 进去默认也是 root；要 agent 身份就：
 #     docker compose exec --user agent agent bash
 # -----------------------------------------------------------------------------
-ENV DSH_PLUGINS=@lolkda/dsh-web-lan@^0.1.0
+ENV HOME=/home/agent \
+    DSH_PLUGINS=@lolkda/dsh-web-lan@^0.1.0
 
 WORKDIR /app
 EXPOSE 3080

@@ -1,17 +1,6 @@
-# =============================================================================
-#  dev-agent —— 备选配置：bridge 网络（保留容器网络隔离）
-#
-#      DSH_HOST=192.168.1.5 docker compose -f compose.bridge.yml up -d
-#      → 浏览器开 http://192.168.1.5:3080
-#
-#  什么时候用这个：
-#    - 你不想让容器共享宿主网络栈（容器将无法访问宿主 loopback 上的其他服务）
-#    - 你想把 web 端口只发布到某一张网卡
-#
-#  代价：必须填一次 DSH_HOST。因为 bridge 下容器看到的网卡是 172.x，而浏览器
-#  发来的 Host 是宿主地址，dsh 的 /api 围栏是精确匹配、不支持通配，对不上就 403。
-#  这是唯一躲不掉的一个值 —— 想要零配置就用默认的 compose.yml。
-# =============================================================================
+# 备选：bridge 网络，保留容器与宿主 loopback 的网络隔离。
+#   DSH_HOST=192.168.1.5 docker compose -f compose.bridge.yml up -d
+# DSH_HOST 同时用于端口绑定和 DSH Host 围栏；默认仅宿主本机访问。
 name: dev-agent
 
 services:
@@ -19,61 +8,38 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        GO_VERSION: "1.27.1"
-        JDK_VERSION: "24"
-        DSH_VERSION: "0.1.6-alpha.2"
-        PNPM_VERSION: "12.4.2"
-        USER_UID: "1000"
-        USER_GID: "1000"
     image: ghcr.io/lolkda/dsh-dev-image:latest
-
     init: true
-    # 直接跑 Web GUI —— docker compose up -d 之后浏览器就能开，不用再 exec 进去手动起。
-    # 需要 shell 就另开一个终端：docker compose exec agent bash
     command: ["dsh", "web"]
+    # 日常 shell：docker compose -f compose.bridge.yml exec --user agent agent bash
     stdin_open: true
     tty: true
     restart: unless-stopped
 
     ports:
-      # 浏览器地址 = http://<DSH_HOST>:<DSH_PORT>
-      #   左边 = 宿主机 IP : 宿主机端口（都可以随便改）
-      #   右边 = 容器内端口，固定 3080，是 dsh 的默认监听端口
-      # 同一个 DSH_HOST 也喂给下面的围栏，所以 IP 只需要填一次。
       - "${DSH_HOST:-127.0.0.1}:${DSH_PORT:-3080}:3080"
-
     volumes:
-      # 和 compose.yml 一样：唯一挂载点 /app
+      # 唯一持久化挂载点，其余容器可写层重建丢弃。
       - ${AGENT_HOME:-/srv/agent}:/app
 
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-
-      # --- DSH 插件（启动时由 entrypoint 登记，见 entrypoint.sh）------------
+      AGENT_UID: ${AGENT_UID:-}
+      AGENT_GID: ${AGENT_GID:-}
       DSH_PROFILE: ${DSH_PROFILE:-web}
-      DSH_PLUGINS: ${DSH_PLUGINS:-@lolkda/dsh-web-lan@^0.1.0}
+      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan@^0.1.0}
       DSH_PLUGINS_REQUIRED: ${DSH_PLUGINS_REQUIRED:-1}
-
-      # /api 的 Host 围栏信任谁 —— 复用同一个 DSH_HOST。
-      # port-less 条目匹配任意端口，所以改 DSH_PORT 不影响这里。
       DSH_WEB_TRUSTED_HOSTS: ${DSH_HOST:-127.0.0.1}
 
-    # --- 资源限制：这台机器上还跑着线上服务，这几行不是可选项 -------------
     cpus: "4"
     mem_limit: 8g
     pids_limit: 2048
-
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     cap_add:
-      # gdb / strace 需要 ptrace，否则跑不起来。
-      # 容器的 PID namespace 是独立的，所以它只能 trace 容器自己的进程，
-      # 摸不到宿主进程（经典风险是 CAP_SYS_PTRACE + --pid=host，这里没有）。
       - SYS_PTRACE
-      # entrypoint 的 root 阶段要用（见 compose.yml 里的详细说明）
       - CHOWN
       - SETUID
       - SETGID
@@ -83,7 +49,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
     networks:
       - agent-net
 

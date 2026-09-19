@@ -1,31 +1,4 @@
-# =============================================================================
-#  构建并发布镜像到 GHCR
-#
-#  发布地址：ghcr.io/<owner>/<repo>
-#    push 到 main     → :main 和 :latest
-#    push tag v1.2.3  → :1.2.3 / :1.2 / :latest
-#    PR               → 只构建不推送，且只构建 amd64（省时间）
-#    手动触发          → 同上
-#
-#  版本号不在这里写死：Dockerfile 里每个 ARG 的默认值就是唯一来源。
-#  要改 Go / JDK / Gradle / uv / yq / DSH 的版本，改 Dockerfile 那一行。
-#
-#  多架构：amd64 + arm64。arm64 走 QEMU 模拟，所以慢（JVM 那几步尤其慢，
-#  整轮可能 20-30 分钟）。想快很多就换成原生 ARM runner（公开仓库免费）：
-#     strategy:
-#       matrix:
-#         include:
-#           - runner: ubuntu-latest
-#             platform: linux/amd64
-#           - runner: ubuntu-24.04-arm
-#             platform: linux/arm64
-#  然后按 platform 分别 push digest，最后用一个 merge job 合 manifest。
-#  或者干脆把 platforms 改成只留 linux/amd64。
-#
-#  首次构建后如果包是私有的，匿名拉取会 404。去
-#  https://github.com/users/<owner>/packages/container/<repo>/settings
-#  把 visibility 改成 public。
-# =============================================================================
+# 每个平台先构建并加载 → 测试该镜像 → 推送不可变 digest；全部通过后才更新公开标签。
 name: build-and-publish
 
 on:
@@ -36,37 +9,36 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  checks:
+    uses: ./.github/workflows/verify-layout.yml
+
   build:
+    needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
       contents: read
       packages: write
-
+    strategy:
+      fail-fast: false
+      matrix:
+        # PR 先测 amd64；发布必须把 arm64 的运行时也验收完，不能只有编译冒烟。
+        arch: ${{ github.event_name == 'pull_request' && fromJSON('["amd64"]') || fromJSON('["amd64", "arm64"]') }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
+      - uses: actions/checkout@v4
+      - name: Set up QEMU for ARM runtime tests
+        if: matrix.arch == 'arm64'
         uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Derive tags and labels
+      - uses: docker/setup-buildx-action@v3
+      - name: Image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -77,21 +49,94 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push
+      - name: Build and load candidate
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: dsh-dev-image:ci
           labels: ${{ steps.meta.outputs.labels }}
-          # 关掉 attestation：它会往 manifest 里塞 unknown/unknown 平台条目，
-          # 让 docker manifest inspect 看起来莫名其妙。自用开发镜像没必要。
           provenance: false
           sbom: false
-          # gha 缓存：Dockerfile 里那些大下载（JDK / Go / Gradle / rust 组件）
-          # 靠层缓存复用，第二次构建快很多。
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+          cache-to: type=gha,scope=image-${{ matrix.arch }},mode=max
+      - name: Verify the exact loaded candidate
+        run: |
+          bash tests/container-runtime.sh dsh-dev-image:ci
+          bash tests/image-smoke.sh dsh-dev-image:ci
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push the tested image without rebuilding
+        if: github.event_name != 'pull_request'
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/${IMAGE_NAME,,}"
+          ref="${image}:ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ARCH}"
+          docker tag dsh-dev-image:ci "$ref"
+          docker push "$ref"
+          mkdir -p "$RUNNER_TEMP/digests"
+          docker image inspect "$ref" --format '{{index .RepoDigests 0}}' > "$RUNNER_TEMP/digests/$ARCH.txt"
+          grep -Eq '^ghcr.io/.+@sha256:[a-f0-9]{64}$' "$RUNNER_TEMP/digests/$ARCH.txt"
+      - name: Export verified digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - name: Public tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Publish manifest from verified digests
+        env:
+          DIGEST_DIR: ${{ runner.temp }}/digests
+          TAGS_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          set -euo pipefail
+          test -s "$DIGEST_DIR/amd64.txt"
+          test -s "$DIGEST_DIR/arm64.txt"
+          mapfile -t images < <(cat "$DIGEST_DIR/amd64.txt" "$DIGEST_DIR/arm64.txt")
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$TAGS_JSON")
+          test "${#images[@]}" = 2
+          test "${#tags[@]}" -gt 0
+          args=()
+          for tag in "${tags[@]}"; do args+=(--tag "$tag"); done
+          docker buildx imagetools create "${args[@]}" "${images[@]}"

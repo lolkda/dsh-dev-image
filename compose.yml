@@ -1,40 +1,8 @@
-# =============================================================================
-#  dev-agent —— 默认配置：零配置直接访问，单挂载点
-#
-#      docker compose up -d
-#      → 浏览器开 http://<宿主机IP>:3080
-#
-#  就这样，不需要填任何 IP，也没有别的挂载点。
-#
-#  ── 单挂载点 ──────────────────────────────────────────────────────────────
-#  只挂 /app 一个目录，容器里其余部分全是只读镜像内容，重建即还原：
-#
-#      /app          ← 宿主目录，唯一出入口
-#        ├── ...     ← 你的代码（工作区）
-#        ├── .dsh/   ← profile、插件、凭证、日志
-#        └── .cache/ ← cargo/go/pip/npm/maven/gradle/uv 缓存
-#
-#  删掉容器 = 镜像层全部还原，你的东西一个不动；备份 = 打包这一个目录。
-#  想清缓存又不想动代码：rm -rf /app/.cache
-#
-#  ── 零配置原理 ────────────────────────────────────────────────────────────
-#  network_mode: host 让容器共享宿主网络栈，于是 dsh 的 /api Host 围栏
-#  在自动派生信任列表时，看到的就是宿主真实网卡：
-#      Object.values(networkInterfaces()).flat()
-#        .filter(i => i.family === "IPv4" && !i.internal).map(i => i.address)
-#  LAN / Tailscale / ZeroTier / VPN 全部自动可信，DHCP 变了重启就跟着变。
-#
-#  为什么 bridge 模式做不到零配置：
-#    bridge 下容器看到的网卡是 172.x，浏览器发的 Host 是宿主地址，对不上 →
-#    /api 403（围栏是精确匹配，不支持通配）。要修就得手工填一次宿主 IP。
-#    需要容器网络隔离时用那个方案：compose.bridge.yml
-#
-#  ⚠️ 唯一要注意的：host 模式下 dsh 绑 0.0.0.0，会在【所有】宿主网卡上监听。
-#     这台机器只要有公网 IP，防火墙就不是可选项：
-#         ufw allow from 192.168.1.0/24 to any port 3080 proto tcp
-#         ufw allow in on tailscale0 to any port 3080 proto tcp
-#         ufw deny 3080/tcp
-# =============================================================================
+# 默认：Linux host 网络，/app 是唯一持久化挂载点。
+#   docker compose up -d
+#   浏览器：http://<宿主机IP>:3080
+# /app 之外仍是容器可写层（不是只读文件系统），重建容器后丢弃。
+# host 网络会监听所有网卡；请按实际访问范围配置宿主防火墙。
 name: dev-agent
 
 services:
@@ -42,78 +10,51 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        GO_VERSION: "1.27.1"
-        JDK_VERSION: "24"
-        DSH_VERSION: "0.1.6-alpha.2"
-        PNPM_VERSION: "12.4.2"
-        USER_UID: "1000"
-        USER_GID: "1000"
+      # 工具链版本只在 Dockerfile ARG 中定义，定制用 --build-arg。
     image: ghcr.io/lolkda/dsh-dev-image:latest
-
     init: true
-    # 直接跑 Web GUI —— docker compose up -d 之后浏览器就能开，不用再 exec 进去手动起。
-    # 需要 shell 就另开一个终端：docker compose exec agent bash
-    # 想跑别的：docker compose run --rm agent dsh headless "跑一下测试"
     command: ["dsh", "web"]
+    # 日常 shell：docker compose exec --user agent agent bash
     stdin_open: true
     tty: true
     restart: unless-stopped
 
-    # ---- 零配置的关键就这一行 ----
+    # 自动识别宿主网卡；host 模式不能再写 ports/networks。
     network_mode: host
-    # 注意：host 模式下不能写 ports:，也不能写 networks:
 
-    # ---- 唯一的挂载点 ----
-    # 宿主目录的属主必须是容器内的 UID（默认 1000）：
-    #     mkdir -p /srv/agent && chown 1000:1000 /srv/agent
     volumes:
+      # 入口处理新建 root-owned 目录；已有非 root 属主会被自动跟随。
       - ${AGENT_HOME:-/srv/agent}:/app
 
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-
-      # --- DSH 插件（启动时由 entrypoint 登记，见 entrypoint.sh）------------
+      AGENT_UID: ${AGENT_UID:-}
+      AGENT_GID: ${AGENT_GID:-}
       DSH_PROFILE: ${DSH_PROFILE:-web}
-      DSH_PLUGINS: ${DSH_PLUGINS:-@lolkda/dsh-web-lan@^0.1.0}
-      # 离线环境设 0，插件装不上也继续启动
+      # 用 - 而不是 :-：显式空值必须真的禁用安装。
+      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan@^0.1.0}
       DSH_PLUGINS_REQUIRED: ${DSH_PLUGINS_REQUIRED:-1}
-
-      # host 模式下宿主所有网卡 IP 已自动可信，这里通常留空。
-      # 只有用【域名】访问时才需要把那个域名写进来。
+      # IP 通常自动可信；通过域名访问时在这里补域名。
       DSH_WEB_TRUSTED_HOSTS: ${DSH_WEB_TRUSTED_HOSTS:-}
 
-    # --- 资源限制：这台机器上还跑着线上服务，这几行不是可选项 -------------
     cpus: "4"
     mem_limit: 8g
-    # 防 fork bomb：agent 跑失控的构建/测试会 fork 爆宿主机
     pids_limit: 2048
-
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     cap_add:
-      # gdb / strace 需要 ptrace，否则跑不起来。
-      # 容器的 PID namespace 是独立的，所以它只能 trace 容器自己的进程，
-      # 摸不到宿主进程（经典风险是 CAP_SYS_PTRACE + --pid=host，这里没有）。
       - SYS_PTRACE
-      # 下面三个是 entrypoint 的 root 阶段要用的，缺了容器起不来：
-      #   CHOWN   把挂载进来的 /app 交给 agent
-      #   SETUID  降权到 agent
-      #   SETGID  同上（含补充组）
-      # 原因：/app 是宿主目录，目录不存在时 Docker 会以 root:root 创建它，
-      # 容器内 UID 1000 的 agent 连 mkdir /app/.dsh 都做不到（EACCES）。
-      # setpriv 降权成功后进程就不再持有它们；其余能力仍全部丢弃。
+      # 仅入口初始化身份/属主需要；普通 mkdir、插件和主进程都在降权后运行。
       - CHOWN
       - SETUID
       - SETGID
 
-    # 日志上限，否则 agent 的长输出会把磁盘写满
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
-    # 依然刻意没有挂 /var/run/docker.sock
+    # 刻意不挂 /var/run/docker.sock。

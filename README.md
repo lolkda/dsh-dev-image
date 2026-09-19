@@ -48,7 +48,7 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 | `maven` | 3.9.16 | Debian 的 maven 包硬依赖 `default-jre-headless`，会拖进整套 openjdk-17（约 150MB）并把 `/usr/bin/java` 指向它 → 官方 tarball |
 | `gh` | 2.23.0 | Debian 版本够用，直接 apt（旧但能用） |
 
-`MAVEN_CONFIG` 和 `GRADLE_USER_HOME` 都指向 `/opt/cache`，随 `agent-cache` 卷持久化。
+Maven 仓库和 Gradle 缓存分别落在 `/app/.cache/m2/repository` 与 `/app/.cache/gradle`，随 `/app` 持久化。Maven 通过镜像内的 `localRepository` 设置读取 `MAVEN_CONFIG`，并非只声明一个不会生效的环境变量。
 
 **没装的**：`nmap` / `tcpdump` / `binwalk` 这类安全工具，以及 `gopls` / `dlv` / `rust-analyzer` 这类语言服务器。它们体积不小，前者还需要额外 capability（`NET_RAW`）。要加就在 apt 列表里补，或让 agent 自己 `go install` / `rustup component add`。
 
@@ -88,7 +88,7 @@ docker compose logs -f          # 第一次会装插件，等几秒
 
 ### 单挂载点：只有 `/app` 一个出入口
 
-容器里除了 `/app`，其余全是只读镜像内容，重建即还原：
+只有 `/app` 持久化。其他路径仍可写，但属于容器可写层，重建容器后丢弃（不是只读文件系统）：
 
 ```
 /app          ← 宿主目录，唯一出入口
@@ -114,28 +114,36 @@ dsh-entrypoint: FATAL 插件安装失败: @lolkda/dsh-web-lan@^0.1.0
 
 原因：`/app` 是宿主目录挂进来的，而**目录不存在时 Docker 会以 `root:root` 创建它**，容器内 UID 1000 的 `agent` 连建子目录都做不到。
 
-镜像的处理方式（和 postgres / mysql / grafana 官方镜像同一套）：
+[entrypoint.sh](entrypoint.sh) 的启动顺序：
 
 ```
-入口以 root 起 → 把 /app 交给运行用户 → setpriv 降权 exec
+校验配置 → root 调整身份与必要属主 → setpriv 降权
+         → agent 创建并验证状态目录 → 安装插件 → exec 主命令
 ```
 
-- 降权后进程**不再持有任何 capability**，跑起来仍是 UID 1000 的 `agent`，不是 root
-- `cap_drop: ALL` 会让 root 也失去 `chown`/`setuid`，所以 compose 补回了三个：`CHOWN`、`SETUID`、`SETGID`。其余仍全部丢弃，比 Docker 默认紧得多
-- 只在 `/app` 对 `agent` 不可写时才做递归 chown，之后重启直接跳过（不会每次扫全树）
+**关键点：不能先把 `/app` chown 给 agent，再让 root 创建子目录。** Compose 丢弃了 `DAC_OVERRIDE`，此时 root 也不能写 agent 的 `0755` 目录。这正是上一版“修了一半”后仍可能报错的原因。
 
-**UID 自动跟随**：`/app` 已经属于某个非 root 用户时（比如你挂的是自己的工程目录），`agent` 直接采用那个 UID/GID，零配置可用，它建出来的文件在宿主上就归你自己，不需要 sudo 才能改。
+- root 初始化仅依赖 `CHOWN`、`SETUID`、`SETGID`；没有为修权限恢复 `DAC_OVERRIDE` 或全部能力。
+- `setpriv` 后主进程使用非 root UID，并开启 `no-new-privileges`；插件也只在降权后安装。
+- 同时重设 `HOME=/home/agent`，让 pnpm 读到正确的 store 配置，而不是继续使用 `/root`。
+- 只修改挂载点本身，以及**不可写的受管状态目录**；不递归 chown 工程代码和 `.git`，健康状态目录重启时不递归扫描。
+- 只读挂载、无法修复的 ACL/NFS 权限、受管路径被普通文件或符号链接占用，会在插件安装前明确失败。`DSH_PLUGINS_REQUIRED=0` 不能跳过这些错误。
+- 已有混合属主的深层文件仍需按报错路径处理；入口不会为发现每一个历史 root 文件而每次扫描整个缓存。
 
-想显式指定就加环境变量：
+**UID 自动跟随**：`/app` 已属于非 root 用户时，采用该 UID/GID；空的 root-owned 挂载点使用镜像构建时的 `USER_UID/USER_GID`（默认 `1000:1000`）。不会自动加入 GID 0。
 
-```yaml
-environment:
-  AGENT_UID: "1001"
-  AGENT_GID: "1001"
+两份 Compose 都支持显式传入运行身份：
+
+```bash
+AGENT_UID=1001 AGENT_GID=1001 docker compose up -d --force-recreate
 ```
 
-> 代价：`docker exec` 进去默认是 root（因为入口需要 root 起）。
-> 要 agent 身份：`docker compose exec --user agent agent bash`
+UID/GID 必须是非零十进制整数。已有授权目录也可以直接使用 `docker run --user UID:GID`，但该模式不会替你修改属主。
+
+> `docker exec` 默认身份仍是 root，因为镜像入口需要 root 初始化。日常必须使用：
+> `docker compose exec --user agent agent bash`，避免重新制造 root-owned 状态。
+>
+> 镜像支持的部署布局固定为 `/app`。入口的 `APP_DIR` 只用于隔离测试等底层调用；仅修改它不会同步镜像 ENV、登录 PATH 与 pnpm 配置，不应拿它更改部署布局。
 
 然后浏览器直接开：
 
@@ -148,7 +156,7 @@ http://<宿主机IP>:3080
 容器起来就直接跑 `dsh web`，不用再 exec 进去手动启动。要 shell 就另开一个终端：
 
 ```bash
-docker compose exec agent bash
+docker compose exec --user agent agent bash
 ```
 
 想跑别的：
@@ -158,11 +166,22 @@ docker compose run --rm agent dsh headless "跑一下测试"   # 一次性任务
 docker compose run --rm agent dsh tui                     # 终端界面
 ```
 
-`compose.yml` 的 `image:` 指向已发布镜像，`docker compose up` 会自动拉。想本地自己构建就加 `--build`：
+**修改了本仓库后，必须重新构建并重建容器；`restart` 不会更新旧容器中的入口。** 推荐在 Linux 部署机上执行：
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --force-recreate
+docker compose logs --tail=100 agent
+docker compose exec --user agent agent sh -c 'id; printf "HOME=%s\n" "$HOME"; test -w /app/.dsh'
 ```
+
+如果改用 CI 已经发布的修正版，而不是本地源码：
+
+```bash
+docker compose pull
+docker compose up -d --force-recreate
+```
+
+本地修改尚未发布时，拉现有 `latest` 不会带上这些修改。以上操作不会删除 `/app` 的 bind mount 数据，不需要 `down -v`。
 
 ### 发布镜像
 
@@ -178,14 +197,20 @@ docker pull ghcr.io/lolkda/dsh-dev-image:latest
 | `:main` | push 到 main |
 | `:1.2.3` / `:1.2` | push `v1.2.3` tag |
 
-构建由 [.github/workflows/build.yml](.github/workflows/build.yml) 驱动：push 到 main 或打 tag 时构建并推送，PR 只构建不推送。
+构建由 [build.yml](.github/workflows/build.yml) 驱动：
+
+1. 先调用 [verify-layout.yml](.github/workflows/verify-layout.yml)，测试当前 checkout 的入口、配置和真实 Linux 权限，而不是拉旧 `latest`。
+2. 每个平台构建并 `load` 到本机 Docker，执行启动权限、工具链、缓存位置和默认 Web HTTP 验收。
+3. **不重新构建**，直接推送已测镜像；通过 digest 合并多架构 manifest 后才更新公开标签。
+
+PR 只测试 amd64、不推送；发布时 amd64 和 arm64 都必须通过。`ci-<run>-<attempt>-<arch>` 是隔离本次产物的中间标签，不建议用于部署。
 
 **版本号只写在 Dockerfile 的 ARG 默认值里**，CI 不重复声明 —— 改版本改那一行就够了。
 
 > **已实测**：公开仓库推的 GHCR 包默认可匿名拉取，不需要手动改 visibility。
 > 匿名请求 `ghcr.io/v2/lolkda/dsh-dev-image/manifests/latest` 返回 200。
 >
-> arm64 走 QEMU 模拟，整轮约 25 分钟。想快就换原生 ARM runner，workflow 顶部注释里有写法。
+> arm64 走 QEMU，发布现在还会运行 ARM 版启动与工具链验收，因此耗时高于仅构建。单个平台上限 90 分钟；需要进一步提速时可改用原生 ARM runner。
 >
 > 镜像不小：amd64 压缩后约 1.4 GB，arm64 约 1.3 GB。大头是 gradle（解压后约 200MB）、
 > Go 工具链、JDK，以及 apt 那一层。想瘦身就删 gradle 或 gdb。
@@ -193,13 +218,13 @@ docker pull ghcr.io/lolkda/dsh-dev-image:latest
 ## 进去干活
 
 ```bash
-docker compose exec agent bash
+docker compose exec --user agent agent bash
 ```
 
 冒烟测试：
 
 ```bash
-docker run --rm dev-agent:latest bash -lc \
+docker run --rm -e DSH_PLUGINS= ghcr.io/lolkda/dsh-dev-image:latest bash -lc \
   'python -V && node -v && pnpm -v && go version && rustc -V && java -version && git --version && dsh --help >/dev/null && echo ALL-OK'
 ```
 
@@ -322,7 +347,11 @@ node_modules/
 
 profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**。构建期写进镜像的 profile 内容会被（首次启动时还是空的）卷整个遮蔽，症状是"插件装了但没生效"，而且完全静默。
 
-所以登记放在 [entrypoint.sh](entrypoint.sh) 里，卷挂好之后才执行。`pnpm add` 幂等，重启直接命中缓存。
+所以登记放在 [entrypoint.sh](entrypoint.sh) 里，卷挂好并降权后才执行。每次启动仍会执行 `pnpm add`：缓存可以复用，但带版本范围的包仍可能查询 registry，**不保证完全离线或永远解析成同一版本**。
+
+`DSH_PROFILE` 同时用于插件安装和默认 Web 启动。`dsh web` 会转换为 `dsh --profile <所选 profile>`，其余启动参数保留；非默认 profile 仍需要具备相应的 Web 配置。
+
+`DSH_PLUGINS` 未设置时使用镜像/Compose 默认插件；显式置空会跳过安装。注意：跳过安装**不会卸载已有 profile 内的插件**；新 profile 若没有 LAN 插件，也不会按默认方案对外监听。
 
 ### 加 / 换插件
 
@@ -360,16 +389,23 @@ docker compose build --build-arg JDK_VERSION=25
 
 ## 缓存与卷
 
-| 卷 | 挂到 | 装什么 |
+只有一个 bind mount，没有额外的命名卷：
+
+| 宿主位置（默认） | 容器位置 | 内容 |
 |---|---|---|
-| `agent-cache` | `/opt/cache` | pip / npm / go / maven / gradle 下载缓存 |
-| `cargo-registry` | `/usr/local/cargo/registry` | cargo 依赖缓存 |
-| `dsh-home` | `/home/agent/.dsh` | profile、插件、`.credentials.yaml`、日志 |
+| `/srv/agent` | `/app` | 工作区代码 |
+| `/srv/agent/.dsh` | `/app/.dsh` | profile、插件、凭证、日志 |
+| `/srv/agent/.cache` | `/app/.cache` | 各语言缓存和 pnpm store |
+
+`docker compose down` 删除容器，不删除这些宿主数据；加 `-v` **也不会删除 bind mount**。要验证全新状态，请换一个空的 `AGENT_HOME`，不要把清理命名卷误当作重置。
 
 ```bash
-docker compose down -v          # 连卷一起删（会丢缓存和插件）
-docker builder prune            # 清构建缓存 —— 服务器磁盘最容易被这个吃满
+# 用隔离的空目录检查一次启动，不动原工作区
+AGENT_HOME="$(mktemp -d)" DSH_PLUGINS='' docker compose run --rm --no-deps agent \
+  sh -c 'id; test -w /app/.dsh && echo STATE-OK'
 ```
+
+备份整个挂载目录即可保留工作区和 DSH 状态。清缓存前应先停止容器；不要在运行中的包管理器旁边删除缓存。
 
 ## 安全设计（这台机器还跑着线上服务）
 
@@ -410,8 +446,8 @@ musl libc 和 manylinux wheel、native node 模块、JVM 全部不兼容，等�
 **`dsh` 不用 `@latest`。**
 npm 上 `latest` = `0.1.5-rc.2`，比 `alpha` = `0.1.6-alpha.2` 还旧，`npm i -g @deepseek-ai/dsh` 会装到旧版本。
 
-**`/usr/local` 的属主给了 `agent`。**
-为了让非 root 也能 `npm i -g` 和 `pip install`（否则只能 venv / `--user`）。容器本身就是隔离边界，这个让步是刻意的；要收紧就删掉 Dockerfile 里 chown 的 `/usr/local`（rust 的两个目录已单独 `a+w`，不受影响）。
+**`/usr/local` 的属主只在构建时调整。**
+它并不随运行时的 UID 自动跟随一起递归改写，而且部分后装包仍属于 root。因此，不保证任意 UID 下全局 `npm i -g` 或系统级包更新都可写；插件安装在 `/app/.dsh` 中，不受这个限制。建议优先使用工作区内的依赖、虚拟环境或用户级 prefix。进一步统一全局安装目录属于下一步独立改造，本次没有用每次启动扫描 `/usr/local` 来掩盖它。
 
 **rust / go 需要 `build-essential`。**
 不只是为了编译 C 扩展：`rustc` 需要一个 cc 才能链接产物，node / rustc / libjvm.so 还都动态链接 `libstdc++6` 和 `libgcc_s`，这两个由 `build-essential` 带进来。
@@ -422,3 +458,35 @@ npm 上 `latest` = `0.1.5-rc.2`，比 `alpha` = `0.1.6-alpha.2` 还旧，`npm i 
 - **MCP 服务器同理**：它们注册在 profile 的 `cordis.patch.yml` 里，不在容器里。而且 `ida` / `reqable` 是 Windows 宿主上的应用，本来就带不过来；`fastctx` 是纯文件/shell，可以。
 - 默认没有 docker 访问能力，容器内不能 `docker build` / `docker compose up`。
 - 默认只支持 `amd64` / `arm64`，其他架构会在 Java / Go 那两步显式报错退出。
+
+## 开发与回归验证
+
+不需要给仓库安装 npm 测试依赖。先在**非 root** 的 Bash 环境（Windows 可用 Git Bash）运行：
+
+```bash
+bash tests/entrypoint.test.sh
+node --test tests/config.test.mjs
+for script in entrypoint.sh tests/*.sh; do bash -n "$script"; done
+shellcheck entrypoint.sh tests/*.sh
+```
+
+[CLI 回归测试](tests/entrypoint.test.sh) 实际执行入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束。它们**不能替代 Linux 的 UID、capability、挂载权限测试**。
+
+Linux + Docker 下的快速权限验收：
+
+```bash
+docker build -f tests/Dockerfile -t dsh-entrypoint-test .
+bash tests/container-runtime.sh dsh-entrypoint-test
+```
+
+[容器回归脚本](tests/container-runtime.sh) 使用真实 `chown`、`setpriv`、文件权限与最小 capabilities，覆盖 root-owned `0755`、非 root-owned `0700`、UID/GID 映射、旧状态、重启、只读挂载和符号链接等场景；不会用 mock 冒充 Linux 权限模型。
+
+完整镜像验收（需要网络安装默认插件）：
+
+```bash
+docker build -t dsh-dev-image:verify .
+bash tests/container-runtime.sh dsh-dev-image:verify
+bash tests/image-smoke.sh dsh-dev-image:verify
+```
+
+[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 Rust 编译、Maven/pnpm 缓存位置，以及默认 Web 启动后的 HTTP 可达性。CI 在发布前执行这些步骤；没有实际运行 Docker 的本地检查不能标记为容器验收通过。
