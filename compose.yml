@@ -1,12 +1,24 @@
 # =============================================================================
-#  dev-agent —— 默认配置：零配置直接访问
+#  dev-agent —— 默认配置：零配置直接访问，单挂载点
 #
 #      docker compose up -d
 #      → 浏览器开 http://<宿主机IP>:3080
 #
-#  就这样，不需要填任何 IP。
+#  就这样，不需要填任何 IP，也没有别的挂载点。
 #
-#  原理：network_mode: host 让容器共享宿主网络栈，于是 dsh 的 /api Host 围栏
+#  ── 单挂载点 ──────────────────────────────────────────────────────────────
+#  只挂 /app 一个目录，容器里其余部分全是只读镜像内容，重建即还原：
+#
+#      /app          ← 宿主目录，唯一出入口
+#        ├── ...     ← 你的代码（工作区）
+#        ├── .dsh/   ← profile、插件、凭证、日志
+#        └── .cache/ ← cargo/go/pip/npm/maven/gradle/uv 缓存
+#
+#  删掉容器 = 镜像层全部还原，你的东西一个不动；备份 = 打包这一个目录。
+#  想清缓存又不想动代码：rm -rf /app/.cache
+#
+#  ── 零配置原理 ────────────────────────────────────────────────────────────
+#  network_mode: host 让容器共享宿主网络栈，于是 dsh 的 /api Host 围栏
 #  在自动派生信任列表时，看到的就是宿主真实网卡：
 #      Object.values(networkInterfaces()).flat()
 #        .filter(i => i.family === "IPv4" && !i.internal).map(i => i.address)
@@ -40,7 +52,6 @@ services:
     image: ghcr.io/lolkda/dsh-dev-image:latest
 
     init: true
-    working_dir: /workspace
     # 直接跑 Web GUI —— docker compose up -d 之后浏览器就能开，不用再 exec 进去手动起。
     # 需要 shell 就另开一个终端：docker compose exec agent bash
     # 想跑别的：docker compose run --rm agent dsh headless "跑一下测试"
@@ -53,11 +64,11 @@ services:
     network_mode: host
     # 注意：host 模式下不能写 ports:，也不能写 networks:
 
+    # ---- 唯一的挂载点 ----
+    # 宿主目录的属主必须是容器内的 UID（默认 1000）：
+    #     mkdir -p /srv/agent && chown 1000:1000 /srv/agent
     volumes:
-      - ${AGENT_WORKSPACE:-/srv/agent/workspace}:/workspace
-      - agent-cache:/opt/cache
-      - cargo-registry:/usr/local/cargo/registry
-      - dsh-home:/home/agent/.dsh
+      - ${AGENT_HOME:-/srv/agent}:/app
 
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -96,8 +107,3 @@ services:
         max-file: "3"
 
     # 依然刻意没有挂 /var/run/docker.sock
-
-volumes:
-  agent-cache:
-  cargo-registry:
-  dsh-home:

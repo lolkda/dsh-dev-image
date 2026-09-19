@@ -1,90 +1,79 @@
 # =============================================================================
-#  实测 /app 单挂载点布局是否成立
+#  验证 /app 单挂载点布局（针对新镜像）
 #
-#  这个 workflow 存在的理由：改 CARGO_HOME / DSH_HOME / GOPATH 到 /app 之后，
-#  有几个行为我没法在本机验证（本机没有 docker，也没有 rust）：
+#  这个 workflow 存在的理由：本机没有 docker，镜像行为只能靠实测。
+#  它已经抓到过一个真 bug —— Debian 的 /etc/profile 会硬编码覆盖 PATH，
+#  导致登录 shell（bash -lc / su - / ssh）里 /opt/* 和 /usr/local/{cargo,go}
+#  下的工具链全部 command not found，只剩恰好在 /usr/local/bin 的 dsh/python。
 #
-#    1. rustup 的 cargo/clippy/rustfmt 都是代理（hardlink 到 rustup），
-#       CARGO_HOME 指向别处时它们还能不能找到工具链？
-#    2. 空目录下 dsh plugin add 能否自己初始化 profile？（本机已实测可以）
-#    3. 挂载卷遮蔽 /app 之后，entrypoint 的 mkdir 能否补回来？
-#    4. python 的 sqlite3 / ssl / ctypes 在 /app 布局下是否正常？
-#
-#  所以直接拿【已发布的真实镜像】跑，而不是靠推理。
+#  现在每次构建完自动跑一遍，盯住这些回归：
+#    1. bash -c 和 bash -lc 两个 shell 下工具链都齐全
+#    2. 空宿主目录挂到 /app 后，子目录被正确补建
+#    3. 空 DSH_HOME 能自己初始化 profile 并装插件
+#    4. cargo 能真的编译（不只是打印版本）
+#    5. python 的 C 扩展（sqlite3/ssl/ctypes/lzma）正常
 # =============================================================================
 name: verify-layout
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/verify-layout.yml"
+  workflow_run:
+    workflows: ["build-and-publish"]
+    types: [completed]
 
 jobs:
   verify:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
-      - name: 用新布局跑真实镜像
+      - name: 单挂载点 + 两个 shell
         run: |
           set -eux
           IMG=ghcr.io/lolkda/dsh-dev-image:latest
           docker pull "$IMG"
 
-          # 模拟 compose 的单挂载点：一个空宿主目录挂到 /app，
-          # 卷会遮蔽镜像里的 /app，然后靠 entrypoint 补建子目录。
+          # 模拟真实部署：一个空的宿主目录挂到 /app，卷会遮蔽镜像里那一层
           HOSTDIR="$(mktemp -d)"
           chmod 777 "$HOSTDIR"
 
-          echo "########## 1. 卷遮蔽 /app 后能否补建目录 ##########"
-          docker run --rm \
-            -v "$HOSTDIR":/app \
-            -e CARGO_HOME=/app/.cache/cargo \
-            -e DSH_HOME=/app/.dsh \
-            -e GOPATH=/app/.cache/go \
-            -e GOMODCACHE=/app/.cache/go/pkg/mod \
-            -e GOCACHE=/app/.cache/go/build \
-            -e PIP_CACHE_DIR=/app/.cache/pip \
-            -e npm_config_cache=/app/.cache/npm \
-            -e MAVEN_CONFIG=/app/.cache/m2 \
-            -e GRADLE_USER_HOME=/app/.cache/gradle \
-            -e UV_CACHE_DIR=/app/.cache/uv \
-            "$IMG" bash -lc '
-              mkdir -p /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build \
-                       /app/.cache/pip /app/.cache/npm /app/.cache/m2 \
-                       /app/.cache/gradle /app/.cache/uv /app/.dsh
-              echo "--- 关键问题 1: 改 CARGO_HOME 后 cargo 还能用吗 ---"
-              echo "CARGO_HOME=$CARGO_HOME"
-              cargo -V
-              rustc -V
-              cargo clippy -V
-              rustfmt --version
-              echo "--- 关键问题 1b: cargo 真的能编译吗（不只是打印版本）---"
-              cd /tmp && cargo new hello --quiet && cd hello
-              cargo build --quiet 2>&1 | tail -5
-              ./target/debug/hello
-              echo "--- 关键问题 1c: 构建产物落在哪 ---"
-              ls -d /app/.cache/cargo/* 2>/dev/null || echo "(CARGO_HOME 下暂时为空，正常)"
-              echo "--- 关键问题 2: 空 DSH_HOME 能否初始化 profile 并装插件 ---"
-              dsh plugin --profile web add @lolkda/dsh-web-lan@^0.1.0 2>&1 | tail -8
-              ls -la /app/.dsh/profiles/web/package.json
-              echo "--- 关键问题 4: python 的 C 扩展模块 ---"
-              python -c "import sqlite3, ssl, ctypes, lzma, bz2, readline; print(\"python ext ok\", sqlite3.sqlite_version)"
-              echo "--- 其余工具链 ---"
-              python -V; node -v; go version; java -version 2>&1 | head -1
-              mvn -v 2>&1 | head -1; gradle --version 2>&1 | grep -i '^Gradle'
-              jq --version; yq --version; uv --version; rg --version | head -1
-              echo "=== LAYOUT VERIFY OK ==="
+          echo "########## 1. 两个 shell 下工具链都要齐全 ##########"
+          for sh in "bash -c" "bash -lc"; do
+            echo "===== [$sh] ====="
+            docker run --rm "$IMG" $sh '
+              for c in python node npm yarn pnpm go rustc cargo java javac mvn gradle \
+                       git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
+                p="$(command -v "$c" 2>/dev/null)" || { echo "  MISSING: $c"; continue; }
+                printf "  ok  %-10s %s\n" "$c" "$p"
+              done
+              echo "  --- cargo 组件 ---"
+              cargo clippy -V; rustfmt --version
             '
+          done
 
-          echo "########## 2. 宿主目录里实际落下了什么 ##########"
-          find "$HOSTDIR" -maxdepth 3 | head -30
-
-          echo "########## 3. 容器内 /app 之外是否还有写入口 ##########"
-          docker run --rm "$IMG" bash -lc '
+          echo "########## 2. 空宿主目录挂 /app ##########"
+          docker run --rm -v "$HOSTDIR":/app "$IMG" bash -c '
             echo "WORKDIR: $(pwd)"
-            echo "--- 挂载点 ---"; mount | grep -E "^/dev" | head -10
-            echo "--- /app 默认内容 ---"; ls -la /app
+            echo "DSH_HOME=$DSH_HOME  CARGO_HOME=$CARGO_HOME"
+            for d in /app /app/.dsh /app/.cache/cargo /app/.cache/go/pkg/mod \
+                     /app/.cache/go/build /app/.cache/pip /app/.cache/npm \
+                     /app/.cache/m2 /app/.cache/gradle /app/.cache/uv; do
+              [ -d "$d" ] && echo "  ok  $d" || echo "  MISSING $d"
+            done
+            echo "--- 空 DSH_HOME 能否初始化 profile 并装插件 ---"
+            ls -la /app/.dsh/profiles/web/package.json
+            echo "--- cargo 真编译 ---"
+            cd /tmp && cargo new hello -q && cd hello && cargo build -q
+            ./target/debug/hello
+            echo "--- python C 扩展 ---"
+            python -c "import sqlite3, ssl, ctypes, lzma, bz2, readline; print(\"ext ok\", sqlite3.sqlite_version)"
+            echo "=== LAYOUT OK ==="
           '
+
+          echo "########## 3. 宿主目录实际落下了什么 ##########"
+          find "$HOSTDIR" -maxdepth 3 | head -25
+
+          echo "########## 4. 容器内除 /app 外应无可写挂载 ##########"
+          docker run --rm "$IMG" bash -c 'mount | grep -E "^/dev" | head; echo "---"; ls -la /app'

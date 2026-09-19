@@ -29,7 +29,6 @@ services:
     image: ghcr.io/lolkda/dsh-dev-image:latest
 
     init: true
-    working_dir: /workspace
     # 直接跑 Web GUI —— docker compose up -d 之后浏览器就能开，不用再 exec 进去手动起。
     # 需要 shell 就另开一个终端：docker compose exec agent bash
     command: ["dsh", "web"]
@@ -45,10 +44,8 @@ services:
       - "${DSH_HOST:-127.0.0.1}:${DSH_PORT:-3080}:3080"
 
     volumes:
-      - ${AGENT_WORKSPACE:-/srv/agent/workspace}:/workspace
-      - agent-cache:/opt/cache
-      - cargo-registry:/usr/local/cargo/registry
-      - dsh-home:/home/agent/.dsh
+      # 和 compose.yml 一样：唯一挂载点 /app
+      - ${AGENT_HOME:-/srv/agent}:/app
 
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -85,11 +82,6 @@ services:
 
     networks:
       - agent-net
-
-volumes:
-  agent-cache:
-  cargo-registry:
-  dsh-home:
 
 networks:
   agent-net:

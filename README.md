@@ -59,10 +59,9 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 ### 最短路径：直接跑镜像
 
 ```bash
-mkdir -p /srv/agent/workspace
+mkdir -p /srv/agent && chown 1000:1000 /srv/agent
 docker run -d --name dsh-agent --restart unless-stopped --network host \
-  -v /srv/agent/workspace:/workspace \
-  -v dsh-agent-home:/home/agent/.dsh \
+  -v /srv/agent:/app \
   ghcr.io/lolkda/dsh-dev-image:latest
 ```
 
@@ -81,11 +80,28 @@ docker run -d --name dsh-agent --restart unless-stopped --network host \
 git clone https://github.com/lolkda/dsh-dev-image.git
 cd dsh-dev-image
 
-mkdir -p /srv/agent/workspace   # 默认挂这里，可用 AGENT_WORKSPACE 改
+mkdir -p /srv/agent && chown 1000:1000 /srv/agent   # 默认挂这里，可用 AGENT_HOME 改
 
 docker compose up -d
 docker compose logs -f          # 第一次会装插件，等几秒
 ```
+
+### 单挂载点：只有 `/app` 一个出入口
+
+容器里除了 `/app`，其余全是只读镜像内容，重建即还原：
+
+```
+/app          ← 宿主目录，唯一出入口
+  ├── ...     ← 你的代码（工作区）
+  ├── .dsh/   ← profile、插件、凭证、日志
+  └── .cache/ ← cargo/go/pip/npm/maven/gradle/uv 缓存
+```
+
+- **备份** = 打包这一个目录
+- **清缓存** = `rm -rf /srv/agent/.cache`（不动代码）
+- **删容器** = 镜像层全部还原，你的东西一个不动
+
+工具链本体（rustup 工具链、JDK、Go、Maven、Gradle）留在镜像内的 `/usr/local` 和 `/opt`，不占用挂载点 —— 它们不需要持久化，重建镜像本来就该换新的。
 
 然后浏览器直接开：
 

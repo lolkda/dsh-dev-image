@@ -86,22 +86,82 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # 环境变量
 # 放在 COPY 之前，这样每条 COPY 后面能立刻冒烟验证。
-# 所有包管理器缓存指向 /opt/cache，compose 把该目录整体挂成卷 —— 容器重建后
-# pip / npm / go / maven / gradle 的下载缓存都还在。
 # -----------------------------------------------------------------------------
+# 一切可写状态都落在 /app 下 —— 它是唯一的挂载点，所以"其他的一概不外露"：
+# 容器里除了 /app，别的都是只读的镜像内容，重建即还原。
+#
+#   /app                 ← 工作区（WORKDIR，也是唯一挂载点）
+#   /app/.dsh            ← DSH_HOME：profile、插件、凭证、日志
+#   /app/.cache/{cargo,go,pip,npm,m2,gradle,uv}   ← 各包管理器缓存
+#
+# 工具链本体（rustup 工具链、JDK、Go、Maven、Gradle）留在镜像内的 /usr/local
+# 与 /opt —— 它们不需要持久化，重建镜像本来就该换新的。
+#
+# RUSTUP_HOME 必须留在镜像内：cargo/rustc/clippy/rustfmt 都是指向 rustup 的
+# 代理，靠 RUSTUP_HOME 找工具链。CARGO_HOME 只放 registry 缓存和 cargo install
+# 的产物，所以可以安全地挪到 /app（已用真实镜像实测：cargo 1.98.1 能正常编译）。
 ENV JAVA_HOME=/opt/java \
     RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    GOPATH=/opt/go \
-    GOMODCACHE=/opt/cache/go/pkg/mod \
-    GOCACHE=/opt/cache/go/build \
-    PIP_CACHE_DIR=/opt/cache/pip \
-    npm_config_cache=/opt/cache/npm \
-    MAVEN_CONFIG=/opt/cache/m2 \
-    GRADLE_USER_HOME=/opt/cache/gradle \
-    UV_CACHE_DIR=/opt/cache/uv \
-    DSH_HOME=/home/agent/.dsh \
-    PATH=/opt/java/bin:/opt/maven/bin:/opt/gradle/bin:/usr/local/cargo/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+    CARGO_HOME=/app/.cache/cargo \
+    GOPATH=/app/.cache/go \
+    GOMODCACHE=/app/.cache/go/pkg/mod \
+    GOCACHE=/app/.cache/go/build \
+    PIP_CACHE_DIR=/app/.cache/pip \
+    npm_config_cache=/app/.cache/npm \
+    MAVEN_CONFIG=/app/.cache/m2 \
+    GRADLE_USER_HOME=/app/.cache/gradle \
+    UV_CACHE_DIR=/app/.cache/uv \
+    DSH_HOME=/app/.dsh \
+    PATH=/app/.cache/cargo/bin:/app/.cache/go/bin:/opt/java/bin:/opt/maven/bin:/opt/gradle/bin:/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# -----------------------------------------------------------------------------
+# 修复登录 shell 丢 PATH —— 这是个真实故障，不是理论问题
+#
+# Debian 的 /etc/profile 会【硬编码覆盖】PATH，完全忽略继承值：
+#
+#     if [ "$(id -u)" -eq 0 ]; then
+#       PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+#     else
+#       PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
+#     fi
+#     export PATH
+#
+# 于是在 `bash -lc` / `su - agent` / `ssh` 里，上面 ENV PATH 里那些
+# /opt/* 和 /usr/local/{cargo,go} 全部消失。用真实镜像实测过：
+#
+#     bash -c   →  cargo/rustc/go/java/mvn/gradle 全部找得到
+#     bash -lc  →  cargo/rustc/go/java/mvn/gradle 全部 command not found
+#                  （只剩 dsh 和 python，因为它们恰好在 /usr/local/bin）
+#
+# 这跟 /app 布局无关，是镜像一直存在的 bug，只是普通 `docker exec` 用的是
+# 非登录 shell，所以之前没暴露。
+#
+# 修法：/etc/profile 在设置完 PATH 之后才 source /etc/profile.d/*.sh，
+# 所以往那里放一个还原脚本即可，不碰系统文件。
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    printf '%s\n' \
+        '#!/bin/sh' \
+        '# 还原 /etc/profile 硬编码覆盖掉的 PATH（见 Dockerfile 同名注释）。' \
+        '# 幂等：用 case 判断，重复 source 不会叠加。' \
+        'for d in /app/.cache/cargo/bin /app/.cache/go/bin /opt/java/bin /opt/maven/bin /opt/gradle/bin /usr/local/cargo/bin /usr/local/go/bin; do' \
+        '    case ":$PATH:" in' \
+        '        *":$d:"*) ;;' \
+        '        *) [ -d "$d" ] && PATH="$d:$PATH" ;;' \
+        '    esac' \
+        'done' \
+        'export PATH' \
+        > /etc/profile.d/00-dsh-path.sh; \
+    chmod 0644 /etc/profile.d/00-dsh-path.sh; \
+    printf '%s\n' \
+        '#!/bin/sh' \
+        '# 登录 shell 下 /app 若尚未存在（卷首次挂载），补建可写子树。' \
+        'for d in /app /app/.dsh /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build /app/.cache/pip /app/.cache/npm /app/.cache/m2 /app/.cache/gradle /app/.cache/uv; do' \
+        '    [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true' \
+        'done' \
+        > /etc/profile.d/01-dsh-app-dirs.sh; \
+    chmod 0644 /etc/profile.d/01-dsh-app-dirs.sh; \
+    ls -la /etc/profile.d/
 
 # -----------------------------------------------------------------------------
 # Node 24
@@ -181,8 +241,8 @@ RUN set -eux; \
 # /usr/bin/java 指向 17 —— 和本文件开头的铁律直接冲突，也让 `java` 的实际
 # 行为依赖 PATH 顺序。官方 tarball 既避开这个，又白送 3.9.x（Debian 是 3.8.7）。
 #
-# MAVEN_CONFIG 已指向 /opt/cache/m2，所以本地仓库落在 /opt/cache/m2/repository，
-# 随 agent-cache 卷持久化。
+# MAVEN_CONFIG 已指向 /app/.cache/m2，所以本地仓库落在 /app/.cache/m2/repository，
+# 随 /app 那个唯一挂载点持久化。
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     base="https://dlcdn.apache.org/maven/maven-3/${MAVEN_VERSION}/binaries"; \
@@ -280,12 +340,15 @@ RUN set -eux; \
 RUN set -eux; ln -sfn /usr/bin/fdfind /usr/local/bin/fd; fd --version
 
 # -----------------------------------------------------------------------------
-# 非 root 用户 + 目录
+# 非 root 用户 + /app
 #
 # /usr/local 交给 agent，是为了让非 root 也能 `npm i -g` / `pip install` /
 # `uv tool install`（否则只能靠 venv / --user）。容器本身就是隔离边界，
 # 这个让步是刻意的；要收紧就删掉 chown 里的 /usr/local
 # （rust 那两个目录已单独 a+w，不受影响）。
+#
+# /app 是唯一挂载点。挂载会遮蔽镜像里这一层，所以 entrypoint 在启动时
+# 补建子目录（卷首次挂载时是空的），profile.d 脚本则在登录 shell 里兜底。
 #
 # git safe.directory 必设：挂载进来的目录属主和容器内 UID 不一致时，
 # git 会直接拒绝操作（"detected dubious ownership"）。
@@ -293,10 +356,11 @@ RUN set -eux; ln -sfn /usr/bin/fdfind /usr/local/bin/fd; fd --version
 RUN set -eux; \
     groupadd -g "${USER_GID}" agent; \
     useradd -m -u "${USER_UID}" -g agent -s /bin/bash agent; \
-    mkdir -p /opt/cache/pip /opt/cache/npm /opt/cache/m2 /opt/cache/gradle \
-             /opt/cache/uv /opt/cache/go/pkg/mod /opt/cache/go/build /opt/go \
-             /workspace "${DSH_HOME}"; \
-    chown -R agent:agent /opt/cache /opt/go /workspace "${DSH_HOME}" /usr/local; \
+    mkdir -p /app/.dsh \
+             /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build \
+             /app/.cache/pip /app/.cache/npm /app/.cache/m2 \
+             /app/.cache/gradle /app/.cache/uv; \
+    chown -R agent:agent /app /usr/local; \
     git config --system --add safe.directory '*'; \
     git config --system core.autocrlf false; \
     git config --system init.defaultBranch main
@@ -319,22 +383,28 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 全链路冒烟：任一工具链没装好，构建就在这里失败，不会拖到运行时才发现
+#
+# 两个 shell 都测：`bash -c` 走 ENV PATH，`bash -lc` 走 /etc/profile
+# （那条路正是之前丢 PATH 的路径，profile.d 的修复必须在这里被验证到）。
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-    python -V; \
-    node -v; npm -v; yarn --version; pnpm --version; \
-    go version; \
-    rustc -V; cargo -V; cargo clippy -V; rustfmt --version; \
-    java -version; javac -version; mvn -v; gradle --version; \
-    git --version; git lfs version; \
-    jq --version; yq --version; uv --version; \
-    rg --version; fd --version; \
-    cmake --version; ninja --version; \
-    sqlite3 --version; tmux -V; shellcheck --version; \
-    gh --version; gdb --version; strace -V; \
-    for c in xxd file tree nc dig ss lsof bc man; do command -v "$c" >/dev/null; done; \
-    dsh --help > /dev/null; \
-    echo '=== ALL TOOLCHAINS OK ==='
+    for sh in "bash -c" "bash -lc"; do \
+        echo "=== 用 [$sh] 验证 ==="; \
+        $sh 'python -V; \
+             node -v; npm -v; yarn --version; pnpm --version; \
+             go version; \
+             rustc -V; cargo -V; cargo clippy -V; rustfmt --version; \
+             java -version; javac -version; mvn -v; gradle --version; \
+             git --version; git lfs version; \
+             jq --version; yq --version; uv --version; \
+             rg --version; fd --version; \
+             cmake --version; ninja --version; \
+             sqlite3 --version; tmux -V; shellcheck --version; \
+             gh --version; gdb --version; strace -V; \
+             for c in xxd file tree nc dig ss lsof bc man; do command -v "$c" >/dev/null; done; \
+             dsh --help > /dev/null'; \
+    done; \
+    echo '=== ALL TOOLCHAINS OK (bash -c and bash -lc) ==='
 
 # -----------------------------------------------------------------------------
 # 入口：启动时登记插件
@@ -358,7 +428,7 @@ RUN chmod 0755 /usr/local/bin/dsh-entrypoint
 # -----------------------------------------------------------------------------
 ENV DSH_PLUGINS=@lolkda/dsh-web-lan@^0.1.0
 
-WORKDIR /workspace
+WORKDIR /app
 USER agent
 EXPOSE 3080
 ENTRYPOINT ["/usr/local/bin/dsh-entrypoint"]

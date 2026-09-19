@@ -24,6 +24,26 @@
 # =============================================================================
 set -euo pipefail
 
+# -----------------------------------------------------------------------------
+# /app 是唯一的挂载点，卷会遮蔽镜像里那一层 —— 卷首次挂载时是空的，
+# 所以子目录得在这里补建。登录 shell 下 /etc/profile.d/01-dsh-app-dirs.sh
+# 也会兜一次（见 Dockerfile 注释）。
+#
+# 用 -p 且忽略失败：宿主目录可能属主不对，那种情况下让后面的 dsh 报错
+# 比在这里静默死掉更容易诊断。
+# -----------------------------------------------------------------------------
+for d in "${DSH_HOME:-/app/.dsh}" \
+         "${CARGO_HOME:-/app/.cache/cargo}" \
+         "${GOPATH:-/app/.cache/go}"/pkg/mod \
+         "${GOCACHE:-/app/.cache/go/build}" \
+         "${PIP_CACHE_DIR:-/app/.cache/pip}" \
+         "${npm_config_cache:-/app/.cache/npm}" \
+         "${MAVEN_CONFIG:-/app/.cache/m2}" \
+         "${GRADLE_USER_HOME:-/app/.cache/gradle}" \
+         "${UV_CACHE_DIR:-/app/.cache/uv}"; do
+    mkdir -p "$d" 2>/dev/null || true
+done
+
 profile="${DSH_PROFILE:-web}"
 
 if [ -n "${DSH_PLUGINS:-}" ]; then
