@@ -465,7 +465,7 @@ npm 上 `latest` = `0.1.5-rc.2`，比 `alpha` = `0.1.6-alpha.2` 还旧，`npm i 
 
 ```bash
 bash tests/entrypoint.test.sh
-node --test tests/config.test.mjs
+node --test tests/*.test.mjs
 for script in entrypoint.sh tests/*.sh; do bash -n "$script"; done
 shellcheck entrypoint.sh tests/*.sh
 ```
@@ -489,4 +489,8 @@ bash tests/container-runtime.sh dsh-dev-image:verify
 bash tests/image-smoke.sh dsh-dev-image:verify
 ```
 
-[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 Rust 编译、Maven/pnpm 缓存位置，以及默认 Web 启动后的 HTTP 可达性。CI 在发布前执行这些步骤；没有实际运行 Docker 的本地检查不能标记为容器验收通过。
+[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 Rust 编译、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
+
+DSH 对匿名 `/` 请求返回 `401` 是正常鉴权行为，不能用匿名 `curl --fail` 判断服务是否启动。验收从该测试容器的启动日志取 token，跟随登录重定向并保留 cookie，最终必须获得 `200`；不会为了测试通过而关闭鉴权。[Web 登录回归](tests/web-ready.test.mjs) 使用真实 HTTP 服务覆盖此流程及失败分支。
+
+CI 在发布前执行这些步骤；没有实际运行 Docker 的本地检查不能标记为容器验收通过。

@@ -24,7 +24,7 @@ jobs:
       - name: Portable CLI and configuration regression tests
         run: |
           bash tests/entrypoint.test.sh
-          node --test tests/config.test.mjs
+          node --test tests/*.test.mjs
       - name: Validate both Compose adapters
         run: |
           docker compose -f compose.yml config --quiet

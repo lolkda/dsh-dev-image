@@ -62,10 +62,10 @@ jobs:
           sbom: false
           cache-from: type=gha,scope=image-${{ matrix.arch }}
           cache-to: type=gha,scope=image-${{ matrix.arch }},mode=max
-      - name: Verify the exact loaded candidate
-        run: |
-          bash tests/container-runtime.sh dsh-dev-image:ci
-          bash tests/image-smoke.sh dsh-dev-image:ci
+      - name: Validate candidate container permissions
+        run: bash tests/container-runtime.sh dsh-dev-image:ci
+      - name: Validate toolchains and temporary Web login
+        run: bash tests/image-smoke.sh dsh-dev-image:ci
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
