@@ -99,7 +99,7 @@ docker compose logs -f          # 第一次会装插件，等几秒
 ```
 
 - **备份** = 打包这一个目录
-- **清缓存** = `rm -rf /srv/agent/.cache`（不动代码）
+- **清缓存** = 停容器后清理 `/srv/agent/.cache`（不动代码和新安装的用户 CLI；旧版 Cargo/Go 工具须先迁移，见下文）
 - **删容器** = 镜像层全部还原，你的东西一个不动
 
 工具链本体（rustup 工具链、JDK、Go、Maven、Gradle）留在镜像内的 `/usr/local` 和 `/opt`，不占用挂载点 —— 它们不需要持久化，重建镜像本来就该换新的。
@@ -126,7 +126,7 @@ dsh-entrypoint: FATAL 插件安装失败: @lolkda/dsh-web-lan@^0.1.0
 
 - root 初始化仅依赖 `CHOWN`、`SETUID`、`SETGID`；没有为修权限恢复 `DAC_OVERRIDE` 或全部能力。
 - `setpriv` 后主进程使用非 root UID，并开启 `no-new-privileges`；插件也只在降权后安装。
-- 统一 `HOME` 和账户家目录为 `/app/.home`，`/home/agent` 仅作兼容链接；pnpm store 通过 `PNPM_CONFIG_STORE_DIR` 固定在 `/app/.cache/pnpm-store`，不再需要覆盖用户的 pnpm 配置文件。
+- 统一 `HOME` 和账户家目录为 `/app/.home`，不再创建额外的主目录兼容链接；pnpm store 通过 `PNPM_CONFIG_STORE_DIR` 固定在 `/app/.cache/pnpm-store`，不再需要覆盖用户的 pnpm 配置文件。
 - 调整账户 UID 时会避免 `usermod` 隐式遍历私有 HOME。已有 HOME 必须属于目标 UID/GID；不一致时会在修改账户或 APP 属主前明确失败，普通启动不递归 chown 私有 HOME。若要改变已有数据的 UID/GID，应先停容器并在宿主完成显式离线迁移，不要放宽私钥权限。
 - 只修改挂载点本身，以及**不可写的受管状态目录**；不递归 chown 工程代码和 `.git`，健康状态目录重启时不递归扫描。
 - 只读挂载、无法修复的 ACL/NFS 权限、受管路径被普通文件或符号链接占用，会在插件安装前明确失败。`DSH_PLUGINS_REQUIRED=0` 不能跳过这些错误。
@@ -432,9 +432,49 @@ docker compose up -d --force-recreate
 
 镜像升级后需重建容器；如果部署面板保留了旧的源环境变量，应清除覆盖或更新其值。CI 会检查工具实际解析的源，并验证国内源下载与切回官方源的行为。
 
+## 用户级 CLI：安装与持久化
+
+新安装的用户级 CLI 默认统一放在 `/app/.home/.local` 下，随唯一的 `/app` 挂载持久化，**不再依赖 `/usr/local` 的属主或可写性**。两份 Compose 自动继承镜像默认值，无需新增挂载或手工运行 `pnpm setup`。
+
+| 安装方式 | 安装数据位置 | 命令目录 | 原生覆盖变量 |
+|---|---|---|---|
+| `npm install -g` | `/app/.home/.local/lib/node_modules` | `/app/.home/.local/bin` | `npm_config_prefix` |
+| `pnpm add -g` | `/app/.home/.local/share/pnpm/global`（版本子目录由 pnpm 管理） | `/app/.home/.local/share/pnpm/bin` | `PNPM_HOME`；也支持 `PNPM_CONFIG_GLOBAL_DIR` / `PNPM_CONFIG_GLOBAL_BIN_DIR` |
+| `yarn global add` | `/app/.home/.local/share/yarn/global` | `/app/.home/.local/bin` | `YARN_GLOBAL_FOLDER` / `YARN_PREFIX` |
+| `python -m pip install --user` | `/app/.home/.local/lib/python3.12/site-packages` | `/app/.home/.local/bin` | `PYTHONUSERBASE` |
+| `uv tool install` | `/app/.home/.local/share/uv/tools` | `/app/.home/.local/bin` | `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` |
+| `cargo install` | `/app/.home/.local`（含安装记录） | `/app/.home/.local/bin` | `CARGO_INSTALL_ROOT` |
+| `go install` | 编译缓存仍在 `/app/.cache/go` | `/app/.home/.local/bin` | `GOBIN` |
+
+日常以 `agent` 身份安装，例如：
+
+```bash
+docker compose exec --user agent agent bash
+npm install -g typescript
+pnpm add -g @biomejs/biome
+uv tool install ruff
+```
+
+- **安装与缓存分开**：新 CLI 的安装数据不放在可清理的 `/app/.cache`。不要把本地源码 `link` 安装等同于独立安装；链接指向的源码也必须保留。
+- **两种 Shell 都可用**：[cli-env.sh](cli-env.sh) 在降权后的入口和登录 Shell 中复用，路径在第一次安装前就加入 PATH；镜像 ENV 还覆盖不经过入口的 `docker exec --user agent ...`。pnpm **12** 的命令目录是 `$PNPM_HOME/bin`，不是旧版常见的 `$PNPM_HOME`。
+- **不覆盖用户配置**：不会改写已有 npm、pnpm、Yarn 或 Shell 配置文件。表中环境变量按包管理器原生优先级覆盖配置文件；需要自定义时，通过 Docker 的 `-e` 或 Compose 的 `environment` 显式设置相应变量。自定义目录必须是非根目录的绝对路径、不能含冒号，并应位于 `/app` 中才能持久化。改变路径后通过入口或新的登录 Shell 更新 PATH；单独给裸 `docker exec` 改 prefix 不会自动改其 PATH。
+- **不改变项目依赖**：项目内 npm 安装、Python venv 等仍按原方式工作；没有设置强制 `PIP_USER`。Python CLI 推荐 `uv tool install`，或明确使用 `pip install --user`。
+- **权限仍由 agent 负责**：CLI 目录只在降权后创建与验证，root 不递归修改私有 HOME。路径被文件、链接占用或不可写时，在安装插件前失败；旧 HOME 的 UID/GID 变更仍需显式离线迁移。
+- **用户命令优先**：默认用户 CLI 路径排在镜像工具之前；同名命令尽量只交给一个包管理器管理，避免互相覆盖。镜像自带的 DSH、pnpm 和语言运行时仍在构建期安装到镜像层，不会被首次挂载遮蔽。
+
+### 从旧版本升级
+
+修改默认安装位置不等于搬迁已有工具：
+
+1. 旧容器中装到 `/usr/local` 的额外全局包不会自动复制。删除旧容器前先记录需要保留的包和版本，再以 agent 在新容器中重新安装；旧容器删除后无法从新镜像找回这些包。
+2. 旧 Cargo/Go 工具所在的 `/app/.cache/cargo/bin`、`/app/.cache/go/bin` 仍保留在 PATH，重装到新默认目录后才适合清理旧缓存。
+3. 旧 Yarn 全局包默认位于 HOME 的 `.config/yarn/global`；可显式保留 `YARN_GLOBAL_FOLDER=/app/.home/.config/yarn/global`，或按原包列表重新安装到新目录。已有文件不会被入口搬移或覆盖。
+
+部署新行为需要**重新构建并重建容器**，只 `restart` 不会更新入口和镜像 ENV。持久化不保证跨 CPU 架构、Python 次版本或不兼容系统库升级后仍可运行；这类升级应重装相应的原生 CLI / 虚拟环境。
+
 ## HOME 持久化与旧版本迁移
 
-`agent` 的 `HOME` 和 Linux 账户家目录现在都是 `/app/.home`；`/home/agent` 是指向它的兼容链接。工作目录仍是 `/app`，仍然只需挂载一个宿主目录。
+`agent` 的 `HOME` 和 Linux 账户家目录现在都是 `/app/.home`，不再创建额外的主目录兼容链接。工作目录仍是 `/app`，仍然只需挂载一个宿主目录。
 
 - 新建 HOME 使用 `0700` 私有权限；[初始化模块](home-init.mjs) 只补缺失的系统 Shell 默认文件，不覆盖已有文件或跟随已有文件链接写入。
 - Git/gh/SSH 的磁盘配置、凭据文件和 HOME 下的用户级安装现在随 `/app` 保留。pnpm store 仍单独放在 `/app/.cache/pnpm-store`；可用 `PNPM_CONFIG_STORE_DIR` 显式覆盖，已有用户配置文件不会被改写。
@@ -443,14 +483,16 @@ docker compose up -d --force-recreate
 
 ### 首次升级前，先从旧容器导出 HOME
 
-**新镜像无法自动找回已经删除的旧容器层。** 如果旧容器还在，应在首次启动新版之前，在 Linux Docker 宿主机执行 [迁移脚本](scripts/migrate-home.sh)。脚本只读取旧容器 `/home/agent` 的文件用于复制，不会打印 token、私钥或配置内容，不会删除源容器。
+**新镜像无法自动找回已经删除的旧容器层。** 如果旧容器还在，应在首次启动新版之前，在 Linux Docker 宿主机执行 [迁移脚本](scripts/migrate-home.sh)。脚本只复制显式指定的旧 HOME，不预设源路径，不会打印 token、私钥或配置内容，不会删除源容器。
 
-以下假设已把新版仓库或迁移脚本放到部署机，挂载目录为 `/home/docker/agent`（其他目录请替换）：
+以下假设已把新版仓库放到部署机，宿主机已安装 Docker、`curl` 和 `jq`，挂载目录为 `/home/docker/agent`（其他目录请替换）。若只复制脚本，需将[迁移脚本](scripts/migrate-home.sh)和[路径检查器](scripts/verify-home-path.sh)放在同一目录：
 
 ```bash
 docker pull ghcr.io/lolkda/dsh-dev-image:latest
+# 停止前读取源 HOME；若自定义过启动环境，请核对它与旧进程实际使用的路径一致。
+source_home="$(docker exec --user agent dsh-agent sh -c 'printf "%s" "$HOME"')"
 docker stop dsh-agent
-sudo bash scripts/migrate-home.sh dsh-agent /home/docker/agent
+sudo bash scripts/migrate-home.sh dsh-agent /home/docker/agent "$source_home"
 
 # 只有迁移成功后才继续；保留旧容器便于回看配置
 docker rename dsh-agent "dsh-agent-old-$(date +%Y%m%d-%H%M%S)"
@@ -459,7 +501,9 @@ docker run -d --name dsh-agent --user 0:0 --restart unless-stopped --network hos
   ghcr.io/lolkda/dsh-dev-image:latest dsh web --no-open
 ```
 
-若显式使用 `AGENT_UID/AGENT_GID`，用 `sudo env AGENT_UID=... AGENT_GID=... bash scripts/migrate-home.sh ...` 传入相同值。脚本仅支持在实际 Docker 宿主机、通过本机 Unix socket 迁移未挂载的旧容器层 HOME；源 HOME 的挂载、根链接、privileged/SYS_ADMIN 容器和 Docker 内部数据路径会被拒绝，避免源/目标重叠及递归自复制。
+第三个参数 `SOURCE_HOME` 必须明确提供：它是旧容器内非根目录的规范绝对路径，不能包含控制字符、重复分隔符、`.` / `..` 路径段或末尾斜杠；省略时脚本直接报错，不猜测源目录。若显式使用 `AGENT_UID/AGENT_GID`，用 `sudo env AGENT_UID=... AGENT_GID=... bash scripts/migrate-home.sh ...` 传入相同值。脚本仅支持在实际 Docker 宿主机、通过本机 Unix socket 迁移未挂载的旧容器层 HOME；源 HOME 的挂载、源目录及其父目录链接、privileged/SYS_ADMIN 容器和 Docker 内部数据路径会被拒绝，避免源/目标重叠及递归自复制。
+
+路径检查器使用 Docker 的 `HEAD /containers/{id}/archive` 接口，按 [PathStat 字段约定](https://raw.githubusercontent.com/moby/moby/v28.3.1/api/types/container/container.go)逐级确认实际目录；它只读取元数据，不启动源容器，不复制父目录内容，读取失败时停止迁移。
 
 迁移先导出到源挂载范围之外的私有临时目录，再放入目标文件系统暂存；需要较大临时空间时可显式指定 `TMPDIR`，但它不能位于源容器挂载范围内。使用旧镜像作为无网络、只读根文件系统的权限修复工具时，APP 只读，仅导出副本可写，并仅授予 `CHOWN`、`DAC_READ_SEARCH`。最终由宿主 root 原子发布 `0700` 的目标目录。正常服务启动仍只需要原来的 `CHOWN/SETUID/SETGID`，没有增加 `DAC_OVERRIDE`。
 
@@ -480,7 +524,7 @@ docker exec -it --user agent dsh-agent bash
 |---|---|---|
 | `/srv/agent` | `/app` | 工作区代码 |
 | `/srv/agent/.dsh` | `/app/.dsh` | DSH profile、插件、凭证、日志 |
-| `/srv/agent/.home` | `/app/.home`（兼容 `/home/agent`） | agent 的用户配置、磁盘凭据和用户级安装 |
+| `/srv/agent/.home` | `/app/.home` | agent 的用户配置、磁盘凭据和用户级安装 |
 | `/srv/agent/.cache` | `/app/.cache` | 各语言缓存和 pnpm store |
 
 `docker compose down` 删除容器，不删除这些宿主数据；加 `-v` **也不会删除 bind mount**。要验证全新状态，请换一个空的 `AGENT_HOME`，不要把清理命名卷误当作重置。
@@ -532,8 +576,8 @@ musl libc 和 manylinux wheel、native node 模块、JVM 全部不兼容，等�
 **`dsh` 不用 `@latest`。**
 npm 上 `latest` = `0.1.5-rc.2`，比 `alpha` = `0.1.6-alpha.2` 还旧，`npm i -g @deepseek-ai/dsh` 会装到旧版本。
 
-**`/usr/local` 的属主只在构建时调整。**
-它并不随运行时的 UID 自动跟随一起递归改写，而且部分后装包仍属于 root。因此，不保证任意 UID 下全局 `npm i -g` 或系统级包更新都可写；插件安装在 `/app/.dsh` 中，不受这个限制。建议优先使用工作区内的依赖、虚拟环境或用户级 prefix。进一步统一全局安装目录属于下一步独立改造，本次没有用每次启动扫描 `/usr/local` 来掩盖它。
+**镜像工具链与用户 CLI 分开。**
+`/usr/local` 的属主只在构建时调整，不随运行时 UID 递归改写；新用户 CLI 通过持久化 HOME 下的原生安装目录解决权限和重建丢失问题。显式指定 `/usr/local` 的系统级安装仍不保证任意 UID 可写或重建后保留。DSH 插件继续安装在 `/app/.dsh`，项目依赖优先使用工作区或虚拟环境。
 
 **rust / go 需要 `build-essential`。**
 不只是为了编译 C 扩展：`rustc` 需要一个 cc 才能链接产物，node / rustc / libjvm.so 还都动态链接 `libstdc++6` 和 `libgcc_s`，这两个由 `build-essential` 带进来。
@@ -552,12 +596,13 @@ npm 上 `latest` = `0.1.5-rc.2`，比 `alpha` = `0.1.6-alpha.2` 还旧，`npm i 
 ```bash
 bash tests/entrypoint.test.sh
 node --test tests/*.test.mjs
-for script in entrypoint.sh scripts/*.sh tests/*.sh; do bash -n "$script"; done
-shellcheck entrypoint.sh scripts/*.sh tests/*.sh
+for script in entrypoint.sh cli-env.sh scripts/*.sh tests/*.sh; do bash -n "$script"; done
+shellcheck entrypoint.sh cli-env.sh scripts/*.sh tests/*.sh
+sh -n cli-env.sh
 node --check home-init.mjs
 ```
 
-[CLI 回归测试](tests/entrypoint.test.sh) 实际执行入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束。它们**不能替代 Linux 的 UID、capability、挂载权限测试**。
+[CLI 回归测试](tests/entrypoint.test.sh) 实际执行入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置与可移植入口用例仍可在 Git Bash 运行。[HOME 路径回归](tests/home-path.test.mjs) 在 Linux 上使用真实 Unix socket HTTP 测试服务验证元数据协议与父目录链接拒绝，需要 `curl` 和 `jq`，不需要 Docker。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
 
 Linux + Docker 下的快速权限验收：
 
@@ -576,7 +621,7 @@ bash tests/container-runtime.sh dsh-dev-image:verify
 bash tests/image-smoke.sh dsh-dev-image:verify
 ```
 
-[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 Rust 编译、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
+[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 Rust 编译、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 用默认与自定义 UID 运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec --user agent`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
 
 DSH 对匿名 `/` 请求返回 `401` 是正常鉴权行为，不能用匿名 `curl --fail` 判断服务是否启动。验收从该测试容器的启动日志取 token，跟随登录重定向并保留 cookie，最终必须获得 `200`；不会为了测试通过而关闭鉴权。[Web 登录回归](tests/web-ready.test.mjs) 使用真实 HTTP 服务覆盖此流程及失败分支。
 

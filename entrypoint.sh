@@ -10,7 +10,7 @@ fatal() { log "FATAL $*"; exit 1; }
 # 非 root 路径也执行同一套准备，可配合预先授权的 docker run --user 使用。
 APP_DIR="${APP_DIR:-/app}"
 profile="${DSH_PROFILE:-web}"
-# HOME 是受管持久化状态；即使旧容器配置沿用 /home/agent，也统一到真实路径。
+# HOME 是受管持久化状态，统一到挂载点内的真实路径。
 export HOME="$APP_DIR/.home"
 export DSH_HOME="${DSH_HOME:-$APP_DIR/.dsh}"
 export CARGO_HOME="${CARGO_HOME:-$APP_DIR/.cache/cargo}"
@@ -182,6 +182,25 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 node_command=/usr/local/bin/node
 [[ -x "$node_command" ]] || node_command=node
 "$node_command" "$script_dir/home-init.mjs" "$HOME" /etc/skel || fatal '持久化 HOME 初始化失败。'
+# shellcheck source=cli-env.sh
+source "$script_dir/cli-env.sh" || fatal '用户级 CLI 环境配置无效。'
+
+# 私有 HOME 下的工具目录只由 agent 创建/验证，root 不递归修复或扫描它们。
+# 缓存与安装产物分开：清理 .cache 不应删除新安装的用户 CLI。
+cli_dirs=(
+    "$HOME/.local" "$HOME/.local/bin" "$HOME/.local/share"
+    "$HOME/.local/share/yarn" "$HOME/.local/share/uv"
+    "$npm_config_prefix" "$npm_config_prefix/bin" "$PNPM_HOME"
+    "${PNPM_CONFIG_GLOBAL_BIN_DIR:-$PNPM_HOME/bin}" "${PNPM_CONFIG_GLOBAL_DIR:-$PNPM_HOME/global}"
+    "$YARN_PREFIX" "$YARN_PREFIX/bin" "$YARN_GLOBAL_FOLDER"
+    "$PYTHONUSERBASE" "$PYTHONUSERBASE/bin" "$UV_TOOL_DIR" "$UV_TOOL_BIN_DIR"
+    "$CARGO_INSTALL_ROOT" "$CARGO_INSTALL_ROOT/bin" "$GOBIN"
+)
+for dir in "${cli_dirs[@]}"; do
+    [[ ! -L "$dir" ]] || fatal "受管 CLI 目录不能是符号链接：$dir"
+    /usr/bin/mkdir -p -- "$dir" || permission_error "$dir"
+    [[ -d "$dir" && -w "$dir" && -x "$dir" ]] || permission_error "$dir"
+done
 cd -- "$APP_DIR" || permission_error "$APP_DIR"
 
 for spec in "${plugins[@]}"; do

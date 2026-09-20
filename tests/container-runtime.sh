@@ -25,7 +25,8 @@ docker run --rm --network none --user 0 --entrypoint /bin/bash \
         chmod 755 /cases
         mkdir -p /cases/root /cases/private /cases/legacy/.dsh \
             /cases/readonly /cases/symlink /cases/explicit /cases/injected/.cache/cargo/bin \
-            /cases/existing-home/.home/.ssh /cases/uid-change-home/.home/.ssh /cases/home-file /cases/home-link
+            /cases/existing-home/.home/.ssh /cases/uid-change-home/.home/.ssh /cases/home-file /cases/home-link \
+            /cases/injected/.home/.local/bin /cases/cli-file/.home /cases/cli-link/.home
         chmod 755 /cases/root /cases/legacy /cases/readonly /cases/symlink /cases/explicit /cases/injected
         chown 12345:12346 /cases/private
         chmod 700 /cases/private
@@ -46,9 +47,13 @@ docker run --rm --network none --user 0 --entrypoint /bin/bash \
         touch /cases/root/project-file /cases/legacy/.dsh/old-state
         chmod 600 /cases/root/project-file /cases/legacy/.dsh/old-state
         chmod 700 /cases/legacy/.dsh
-        ln -s /home/agent /cases/symlink/.dsh
+        ln -s /cases/root /cases/symlink/.dsh
         printf "#!/bin/bash\ntouch /app/root-path-executed\nexec /usr/bin/id \"\u0024@\"\n" > /cases/injected/.cache/cargo/bin/id
         chmod 755 /cases/injected/.cache/cargo/bin/id
+        cp /cases/injected/.cache/cargo/bin/id /cases/injected/.home/.local/bin/id
+        touch /cases/cli-file/.home/.local
+        ln -s /tmp /cases/cli-link/.home/.local
+        chown -hR "$(id -u agent):$(id -g agent)" /cases/injected/.home /cases/cli-file/.home /cases/cli-link/.home
     '
 
 run_runtime() {
@@ -65,19 +70,22 @@ check='set -euo pipefail
     test "$(/usr/bin/id -g)" = "$EXPECT_GID"
     test "$HOME" = /app/.home
     test "$(getent passwd agent | cut -d: -f6)" = "$HOME"
-    test -L /home/agent
-    test "$(readlink -f /home/agent)" = "$HOME"
+    test -d "$HOME" && test ! -L "$HOME"
     test "$(stat -c %a "$HOME")" = 700
     test "$(stat -c %u:%g "$HOME")" = "$EXPECT_UID:$EXPECT_GID"
     test "$PWD" = /app
     test "$(awk '\''$1 == "CapEff:" { print $2 }'\'' /proc/self/status)" = 0000000000000000
     for d in /app/.dsh /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build \
              /app/.cache/npm /app/.cache/pip /app/.cache/m2 /app/.cache/gradle \
-             /app/.cache/uv /app/.cache/pnpm-store; do
+             /app/.cache/uv /app/.cache/pnpm-store /app/.home/.local/bin \
+             /app/.home/.local/share/pnpm/bin /app/.home/.local/share/yarn/global \
+             /app/.home/.local/share/uv/tools; do
         test -d "$d"; test -w "$d"; test -x "$d"
     done
     node -e '\''const fs=require("node:fs"); fs.mkdirSync("/app/.dsh/probe",{recursive:true}); fs.writeFileSync("/app/.dsh/probe/write", "ok");'\''
     test "$(stat -c %u:%g /app/.dsh/probe/write)" = "$EXPECT_UID:$EXPECT_GID"
+    test "$(npm prefix --global)" = /app/.home/.local
+    test "$(stat -c %u:%g /app/.home/.local/bin)" = "$EXPECT_UID:$EXPECT_GID"
 '
 
 persist_write='
@@ -90,6 +98,8 @@ persist_write='
     printf "%s" "$(< /etc/hostname)" > "$HOME/container-fixture-id"
     git -C /app init -q
     git -C /app check-ignore -q .home/.config/gh/hosts.yml
+    printf "#!/bin/sh\nprintf persistent-cli\n" > "$HOME/.local/bin/dsh-runtime-cli-fixture"
+    chmod 755 "$HOME/.local/bin/dsh-runtime-cli-fixture"
 '
 persist_check='
     test "$(< "$HOME/.config/gh/hosts.yml")" = fixture-gh
@@ -98,6 +108,9 @@ persist_check='
     test "$(stat -c %a "$HOME/.ssh")" = 700
     test "$(stat -c %a "$HOME/.ssh/fixture-key")" = 600
     test "$(< "$HOME/container-fixture-id")" != "$(< /etc/hostname)"
+    for mode in -ec -lec; do
+        bash "$mode" '\''test "$(dsh-runtime-cli-fixture)" = persistent-cli'\''
+    done
 '
 
 printf '\n=== root-owned 0755, minimal capabilities ===\n'
@@ -175,7 +188,7 @@ if grep -q UNEXPECTED_COMMAND "$scratch/symlink.log"; then
     printf 'Command ran despite a managed symlink\n' >&2; exit 1
 fi
 
-for home_case in home-file home-link; do
+for home_case in home-file home-link cli-file cli-link; do
     printf '\n=== malformed persistent HOME: %s ===\n' "$home_case"
     if run_runtime "type=bind,source=$scratch/$home_case,target=/app" \
         'echo UNEXPECTED_COMMAND' > "$scratch/$home_case.log" 2>&1; then

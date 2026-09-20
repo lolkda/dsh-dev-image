@@ -61,6 +61,31 @@ for (const [index, match] of [...smoke[1].matchAll(/"bash ([^"]+)"/g)].entries()
   });
 }
 
+const userCliDefaults = {
+  npm_config_prefix: '/app/.home/.local',
+  PNPM_HOME: '/app/.home/.local/share/pnpm',
+  YARN_PREFIX: '/app/.home/.local',
+  YARN_GLOBAL_FOLDER: '/app/.home/.local/share/yarn/global',
+  PYTHONUSERBASE: '/app/.home/.local',
+  UV_TOOL_DIR: '/app/.home/.local/share/uv/tools',
+  UV_TOOL_BIN_DIR: '/app/.home/.local/bin',
+  CARGO_INSTALL_ROOT: '/app/.home/.local',
+  GOBIN: '/app/.home/.local/bin',
+};
+for (const [key, expected] of Object.entries(userCliDefaults)) {
+  test(`image exposes persistent ${key} even for direct docker exec`, () => {
+    const expression = dockerfile.match(new RegExp(`^(?:ENV\\s+|\\s+)${key}=(\\S+)`, 'm'))?.[1];
+    assert.equal(expression, expected);
+  });
+}
+
+test('user CLI defaults cannot redirect build-time installation of pinned image tools', () => {
+  const bootstrap = dockerfile.indexOf('npm install -g "@deepseek-ai/dsh@${DSH_VERSION}"');
+  const userDefaults = dockerfile.search(/^(?:ENV\s+|\s+)npm_config_prefix=/m);
+  assert.ok(bootstrap >= 0);
+  assert.ok(userDefaults > bootstrap, 'User CLI prefix must be enabled only after the image toolchain is installed');
+});
+
 test('image provides persistent HOME even for docker exec', () => {
   assert.match(dockerfile, /\bHOME=\/app\/\.home\b/);
 });
@@ -69,9 +94,11 @@ test('agent account home is inside the persistent mount', () => {
   assert.match(dockerfile, /useradd[^\n;]*-d \/app\/\.home/);
 });
 
-test('the legacy home path remains a compatibility alias', () => {
-  assert.match(dockerfile, /ln -s \/app\/\.home \/home\/agent/);
-});
+for (const path of ['Dockerfile', 'tests/Dockerfile']) {
+  test(`${path}: persistent HOME has no alternate compatibility alias`, () => {
+    assert.doesNotMatch(read(path), /\bln\s+-s\s+\/app\/\.home\s/);
+  });
+}
 
 test('pnpm store does not depend on an ephemeral user config file', () => {
   assert.match(dockerfile, /PNPM_CONFIG_STORE_DIR=\/app\/\.cache\/pnpm-store/);

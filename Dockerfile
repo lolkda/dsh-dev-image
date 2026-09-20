@@ -98,8 +98,8 @@ RUN set -eux; \
 # 与 /opt —— 它们不需要持久化，重建镜像本来就该换新的。
 #
 # RUSTUP_HOME 必须留在镜像内：cargo/rustc/clippy/rustfmt 都是指向 rustup 的
-# 代理，靠 RUSTUP_HOME 找工具链。CARGO_HOME 只放 registry 缓存和 cargo install
-# 的产物，所以可以安全地挪到 /app（已用真实镜像实测：cargo 1.98.1 能正常编译）。
+# 代理，靠 RUSTUP_HOME 找工具链。CARGO_HOME 放 registry 缓存；运行时通过
+# CARGO_INSTALL_ROOT 把新安装的 CLI 放进持久化 HOME，不与可清理缓存混在一起。
 ENV JAVA_HOME=/opt/java \
     RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/app/.cache/cargo \
@@ -174,7 +174,7 @@ RUN set -eux; node -v; npm -v; yarn --version
 # Rust 1.98
 #
 # RUSTUP_HOME 和代理程序留在镜像内，CARGO_HOME 指向 /app/.cache/cargo。
-# 单挂载点持久化 registry 缓存与 cargo install 产物，不遮蔽镜像工具链。
+# 单挂载点持久化缓存；cargo install 产物通过文件末尾的 CARGO_INSTALL_ROOT 单独保存。
 #
 # clippy / rustfmt 必须单独加：官方 slim 镜像是 minimal profile，只有
 # rustc / cargo / rust-std，没有这两个。对 agent 来说 cargo clippy 和
@@ -337,9 +337,9 @@ RUN set -eux; ln -sfn /usr/bin/fdfind /usr/local/bin/fd; fd --version
 # -----------------------------------------------------------------------------
 # 非 root 用户 + /app
 #
-# /usr/local 交给 agent，是为了让非 root 也能 `npm i -g` / `pip install` /
-# `uv tool install`（否则只能靠 venv / --user）。容器本身就是隔离边界，
-# 这个让步是刻意的；要收紧就删掉 chown 里的 /usr/local
+# 保留 /usr/local 的历史构建属主，但运行时不递归改写它，也不依赖它安装用户 CLI。
+# 新 CLI 默认安装到 /app/.home/.local；显式系统级安装仍属于可丢弃的容器层。
+# 若需进一步收紧镜像工具链，可单独移除这里的 /usr/local chown
 # （rust 那两个目录已单独 a+w，不受影响）。
 #
 # /app 是唯一挂载点。挂载会遮蔽镜像里这一层，所以 entrypoint 在启动时
@@ -351,8 +351,7 @@ RUN set -eux; ln -sfn /usr/bin/fdfind /usr/local/bin/fd; fd --version
 RUN set -eux; \
     groupadd -g "${USER_GID}" agent; \
     useradd -M -u "${USER_UID}" -g agent -d /app/.home -s /bin/bash agent; \
-    mkdir -p /home /etc/dsh; \
-    ln -s /app/.home /home/agent; \
+    mkdir -p /etc/dsh; \
     printf '/.home/\n/.home-import.*/\n' > /etc/dsh/gitignore; \
     git config --system core.excludesFile /etc/dsh/gitignore; \
     mkdir -p /app/.dsh \
@@ -416,9 +415,13 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 COPY entrypoint.sh /usr/local/bin/dsh-entrypoint
 COPY home-init.mjs /usr/local/bin/home-init.mjs
+COPY cli-env.sh /usr/local/bin/cli-env.sh
 RUN set -eux; \
     chmod 0755 /usr/local/bin/dsh-entrypoint; \
+    chmod 0644 /usr/local/bin/cli-env.sh; \
+    ln -s /usr/local/bin/cli-env.sh /etc/profile.d/10-dsh-cli.sh; \
     bash -n /usr/local/bin/dsh-entrypoint; \
+    sh -n /usr/local/bin/cli-env.sh; \
     node --check /usr/local/bin/home-init.mjs; \
     for c in setpriv usermod groupmod stat getent node; do \
         command -v "$c" >/dev/null || { echo "entrypoint 依赖缺失: $c" >&2; exit 1; }; \
@@ -452,9 +455,20 @@ ENV npm_config_registry=https://registry.npmmirror.com \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
 
+# 用户 CLI 默认值仅在工具链安装完成后启用，避免把镜像内 DSH/pnpm 装进卷。
+# 项目依赖和 venv 不变；Python CLI 使用 uv tool install 或 pip install --user。
 ENV HOME=/app/.home \
+    npm_config_prefix=/app/.home/.local \
+    PNPM_HOME=/app/.home/.local/share/pnpm \
+    YARN_PREFIX=/app/.home/.local \
+    YARN_GLOBAL_FOLDER=/app/.home/.local/share/yarn/global \
+    PYTHONUSERBASE=/app/.home/.local \
+    UV_TOOL_DIR=/app/.home/.local/share/uv/tools \
+    UV_TOOL_BIN_DIR=/app/.home/.local/bin \
+    CARGO_INSTALL_ROOT=/app/.home/.local \
+    GOBIN=/app/.home/.local/bin \
     PNPM_CONFIG_STORE_DIR=/app/.cache/pnpm-store \
-    PATH=${PATH}:/app/.home/.local/bin:/app/.home/bin \
+    PATH=/app/.home/.local/bin:/app/.home/.local/share/pnpm/bin:${PATH}:/app/.home/bin \
     DSH_PLUGINS="@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0"
 
 WORKDIR /app

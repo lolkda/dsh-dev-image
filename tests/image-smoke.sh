@@ -43,7 +43,7 @@ main() {
             test "$(id -u)" != 0
             test "$HOME" = /app/.home
             test "$(getent passwd agent | cut -d: -f6)" = "$HOME"
-            test "$(readlink -f /home/agent)" = "$HOME"
+            test -d "$HOME" && test ! -L "$HOME"
             for tool in python node npm yarn pnpm go rustc cargo java javac mvn gradle \
                         git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
                 command -v "$tool" >/dev/null
@@ -116,6 +116,11 @@ main() {
         repository="$(mvn -q -Dstyle.color=never help:evaluate -Dexpression=settings.localRepository -DforceStdout)"
         test "$repository" = /app/.cache/m2/repository
     '
+
+    # 在独立 bind mount 中用默认与自定义 UID 安装 CLI，跨容器验证并清理缓存。
+    local root
+    root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+    bash "$root/tests/user-cli-runtime.sh" "$image"
 
     # 临时启动默认 Web/插件；只发布 runner 的 loopback 端口，不在 CI 打开浏览器。
     # 与默认 CMD 唯一差别是 --no-open；结束时清理容器和 cookie。

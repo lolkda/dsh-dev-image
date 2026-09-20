@@ -10,9 +10,14 @@ preserve_exports() {
         fi
     done
 }
-[[ $# == 2 ]] || fatal 'usage: sudo bash scripts/migrate-home.sh OLD_CONTAINER HOST_APP_DIR'
+[[ $# == 3 ]] || fatal 'usage: sudo bash scripts/migrate-home.sh OLD_CONTAINER HOST_APP_DIR SOURCE_HOME'
 container="${1#/}"
 [[ "$container" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || fatal '容器名称不合法。'
+# 源目录由操作者显式提供；拒绝会改变 docker cp 链接语义或绕过挂载比较的路径。
+source_home="$3"
+[[ "$source_home" == /* && "$source_home" != / && "$source_home" != *[[:cntrl:]]* \
+    && "$source_home/" != *'//'* && "$source_home/" != *'/./'* && "$source_home/" != *'/../'* ]] \
+    || fatal 'SOURCE_HOME 必须是非根目录的规范绝对路径，不含控制字符、重复分隔符、点路径段或末尾斜杠。'
 [[ -d "$2" ]] || fatal '宿主挂载目录不存在。'
 app_dir="$(cd -- "$2" && pwd -P)"
 [[ "$app_dir" != / ]] || fatal '不能把宿主根目录用作 APP 挂载目录。'
@@ -44,10 +49,12 @@ done <<< "$(docker inspect --format '{{range .HostConfig.CapAdd}}{{println .}}{{
 while IFS= read -r destination; do
     [[ -n "$destination" ]] || continue
     destination="${destination%/}/"
-    if [[ /home/agent/ == "$destination"* || "$destination" == /home/agent/* ]]; then
+    if [[ "$source_home/" == "$destination"* || "$destination" == "$source_home/"* ]]; then
         fatal '源 HOME 存在挂载；请直接备份其宿主数据，本脚本不做重叠导出。'
     fi
 done <<< "$(docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "$container")"
+# 父目录链接可能把词法路径重定向到挂载内；复制前按容器视图逐级检查。
+bash "$(dirname -- "${BASH_SOURCE[0]}")/verify-home-path.sh" "${endpoint#unix://}" "$container" "$source_home"
 docker_root="$(docker info --format '{{.DockerRootDir}}')"
 if [[ -d "$docker_root" ]]; then docker_root="$(cd -- "$docker_root" && pwd -P)"; fi
 [[ -n "$docker_root" && "$app_dir" != "$docker_root" && "$app_dir" != "$docker_root/"* ]] \
@@ -72,7 +79,7 @@ staging=''
 export_dir="$(mktemp -d "$export_parent/dsh-home-export.XXXXXX")"
 trap preserve_exports EXIT
 # 不加 -L 或尾随 /.，仅复制根链接本身并拒绝，不跟随到另一棵数据树。
-docker cp "$container:/home/agent" "$export_dir/"
+docker cp "$container:$source_home" "$export_dir/agent"
 [[ -d "$export_dir/agent" && ! -L "$export_dir/agent" ]] \
     || fatal '源 HOME 不是实际目录或已是链接；未发布，请直接迁移其已有持久化数据。'
 # 已完成安全导出，再放到目标同一文件系统，保证最后的发布可以原子 rename。
