@@ -10,6 +10,8 @@ fatal() { log "FATAL $*"; exit 1; }
 # 非 root 路径也执行同一套准备，可配合预先授权的 docker run --user 使用。
 APP_DIR="${APP_DIR:-/app}"
 profile="${DSH_PROFILE:-web}"
+# HOME 是受管持久化状态；即使旧容器配置沿用 /home/agent，也统一到真实路径。
+export HOME="$APP_DIR/.home"
 export DSH_HOME="${DSH_HOME:-$APP_DIR/.dsh}"
 export CARGO_HOME="${CARGO_HOME:-$APP_DIR/.cache/cargo}"
 export GOPATH="${GOPATH:-$APP_DIR/.cache/go}"
@@ -35,7 +37,7 @@ validate_id() {
 [[ -z "${AGENT_GID:-}" ]] || validate_id AGENT_GID "$AGENT_GID"
 
 state_dirs=(
-    "$APP_DIR/.cache" "$DSH_HOME" "$CARGO_HOME" "$GOPATH" "$GOMODCACHE"
+    "$HOME" "$APP_DIR/.cache" "$DSH_HOME" "$CARGO_HOME" "$GOPATH" "$GOMODCACHE"
     "$GOCACHE" "$PIP_CACHE_DIR" "$npm_config_cache" "$MAVEN_CONFIG"
     "$GRADLE_USER_HOME" "$UV_CACHE_DIR" "$APP_DIR/.cache/pnpm-store"
 )
@@ -95,16 +97,41 @@ if (( EUID == 0 )); then
     validate_id AGENT_UID "$want_uid"
     validate_id AGENT_GID "$want_gid"
 
+    # 在改账户或 APP owner 前检查私有 HOME。换 UID 是显式离线迁移，不在这里
+    # 尝试用缺少读取权限的 root 递归修改旧 HOME，避免失败前只改了一半。
+    app_uid="$(stat -c %u -- "$APP_DIR")"
+    app_gid="$(stat -c %g -- "$APP_DIR")"
+    mount_owner=(/usr/bin/setpriv --reuid="$app_uid" --regid="$app_gid" --clear-groups --)
+    "${mount_owner[@]}" test -x "$APP_DIR" || permission_error "$APP_DIR"
+    if "${mount_owner[@]}" test -L "$HOME"; then
+        fatal "受管 HOME 不能是符号链接：$HOME"
+    fi
+    if "${mount_owner[@]}" test -e "$HOME"; then
+        "${mount_owner[@]}" test -d "$HOME" || fatal "HOME 路径不是目录：$HOME"
+        home_identity="$("${mount_owner[@]}" stat -c '%u:%g' -- "$HOME")"
+        [[ "$home_identity" == "$want_uid:$want_gid" ]] || fatal "HOME 属于 $home_identity，目标为 $want_uid:$want_gid；请先显式离线迁移 HOME 属主。本次未修改账户或挂载目录。"
+    fi
+
     if [[ "$cur_gid" != "$want_gid" ]]; then
         log "agent GID $cur_gid -> $want_gid"
         groupmod -o -g "$want_gid" agent || fatal '无法调整 agent GID。'
     fi
     if [[ "$cur_uid" != "$want_uid" ]]; then
         log "agent UID $cur_uid -> $want_uid"
-        usermod -o -u "$want_uid" agent || fatal '无法调整 agent UID。'
+        # usermod -u 会隐式遍历 HOME。先指向 root 控制目录内的非存在路径，
+        # 避免它在最小 capabilities 下扫描已有 0700 私有 HOME / SSH 目录。
+        uid_staging="$(mktemp -d)"
+        if ! usermod -o -u "$want_uid" -d "$uid_staging/absent-home" agent; then
+            usermod -d "$HOME" agent || log 'WARNING agent HOME 恢复失败；本次不启动主进程。'
+            fatal '无法调整 agent UID。'
+        fi
+        usermod -d "$HOME" agent || fatal '无法恢复 agent HOME。'
+        rmdir -- "$uid_staging"
     fi
-    if [[ "$cur_uid:$cur_gid" != "$want_uid:$want_gid" ]]; then
-        chown -hR "$want_uid:$want_gid" /home/agent || permission_error /home/agent
+    account_home="$(getent passwd agent | cut -d: -f6)"
+    if [[ "$account_home" != "$HOME" ]]; then
+        # 仅 -d，不搬移或递归修改已有用户数据；也修复中断的 UID 调整。
+        usermod -d "$HOME" agent || fatal '无法设置 agent HOME。'
     fi
 
     # 只修复挂载点本身，不动工程内的代码、.git 或其他不属于镜像管理的文件。
@@ -120,16 +147,21 @@ if (( EUID == 0 )); then
         if as_agent test -L "$dir"; then
             fatal "受管状态目录不能是符号链接：$dir"
         fi
-        if as_agent test -e "$dir" && ! writable_as_agent "$dir"; then
+        if as_agent test -e "$dir"; then
             as_agent test -d "$dir" || fatal "状态路径不是目录：$dir"
-            log "修复状态目录属主：$dir -> $want_uid:$want_gid"
-            chown -hR "$want_uid:$want_gid" "$dir" || permission_error "$dir"
-            writable_as_agent "$dir" || permission_error "$dir"
+            if [[ "$dir" == "$HOME" ]]; then
+                [[ "$(as_agent stat -c '%u:%g' -- "$dir")" == "$want_uid:$want_gid" ]] || fatal 'HOME 属主已变化，请先停止其他写入并显式迁移。'
+                writable_as_agent "$dir" || permission_error "$dir"
+            elif ! writable_as_agent "$dir"; then
+                log "修复状态目录属主：$dir -> $want_uid:$want_gid"
+                chown -hR "$want_uid:$want_gid" "$dir" || permission_error "$dir"
+                writable_as_agent "$dir" || permission_error "$dir"
+            fi
         fi
     done
 
-    # setpriv 不会像 login 一样重置 HOME；不重置会让 pnpm 错读 /root 的配置。
-    export HOME=/home/agent USER=agent LOGNAME=agent PATH="$runtime_path"
+    # setpriv 不会像 login 一样重置用户环境；HOME 已统一到持久化真实路径。
+    export USER=agent LOGNAME=agent PATH="$runtime_path"
     log "以 agent ($want_uid:$want_gid) 启动，HOME=$HOME"
     exec /usr/bin/setpriv --reuid=agent --regid=agent --init-groups --no-new-privs \
         -- /bin/bash "$0" "$@"
@@ -139,9 +171,17 @@ fi
 [[ -d "$APP_DIR" && -w "$APP_DIR" && -x "$APP_DIR" ]] || permission_error "$APP_DIR"
 for dir in "${state_dirs[@]}"; do
     [[ ! -L "$dir" ]] || fatal "受管状态目录不能是符号链接：$dir"
-    mkdir -p -- "$dir" || permission_error "$dir"
+    if [[ "$dir" == "$HOME" ]]; then
+        (umask 077; mkdir -p -- "$dir") || permission_error "$dir"
+    else
+        mkdir -p -- "$dir" || permission_error "$dir"
+    fi
     [[ -d "$dir" && -w "$dir" && -x "$dir" ]] || permission_error "$dir"
 done
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+node_command=/usr/local/bin/node
+[[ -x "$node_command" ]] || node_command=node
+"$node_command" "$script_dir/home-init.mjs" "$HOME" /etc/skel || fatal '持久化 HOME 初始化失败。'
 cd -- "$APP_DIR" || permission_error "$APP_DIR"
 
 for spec in "${plugins[@]}"; do

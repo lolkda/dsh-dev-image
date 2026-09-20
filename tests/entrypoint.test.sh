@@ -166,6 +166,41 @@ web_command_uses_selected_profile() {
     cmp "$CASE_DIR/expected" "$CALLS"
 }
 
+home_is_inside_the_mount() {
+    setup_case
+    bash "$ROOT/entrypoint.sh" bash -c 'test "$HOME" = "$APP_DIR/.home" && test -d "$HOME"'
+}
+
+home_survives_a_new_entrypoint_process() {
+    setup_case
+    bash "$ROOT/entrypoint.sh" bash -c 'printf fixture-state > "$HOME/persistence-marker"'
+    bash "$ROOT/entrypoint.sh" bash -c 'test "$(< "$HOME/persistence-marker")" = fixture-state'
+    test -f "$APP_DIR/.home/persistence-marker"
+}
+
+existing_home_configuration_is_not_overwritten() {
+    setup_case
+    mkdir -p "$APP_DIR/.home"
+    printf user-configuration > "$APP_DIR/.home/.bashrc"
+    bash "$ROOT/entrypoint.sh" true
+    test "$(< "$APP_DIR/.home/.bashrc")" = user-configuration
+}
+
+home_file_is_rejected_before_plugins() {
+    setup_case
+    export DSH_PLUGINS='@example/plugin@1.0.0'
+    touch "$APP_DIR/.home"
+    if bash "$ROOT/entrypoint.sh" true > "$CASE_DIR/output" 2>&1; then
+        printf 'Expected a file at the persistent HOME path to fail\n' >&2
+        return 1
+    fi
+    test ! -s "$CALLS"
+}
+
+run_case 'place HOME inside the persistent mount' home_is_inside_the_mount
+run_case 'preserve HOME state across entrypoint processes' home_survives_a_new_entrypoint_process
+run_case 'preserve an existing HOME configuration' existing_home_configuration_is_not_overwritten
+run_case 'reject a file at HOME before installing plugins' home_file_is_rejected_before_plugins
 run_case 'use the selected profile for the default web command' web_command_uses_selected_profile
 run_case 'allow DSH_PLUGINS to be unset' unset_plugins_is_supported
 run_case 'support newline-separated plugin specs' multiline_plugins_are_preserved

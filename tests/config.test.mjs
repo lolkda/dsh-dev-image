@@ -61,8 +61,20 @@ for (const [index, match] of [...smoke[1].matchAll(/"bash ([^"]+)"/g)].entries()
   });
 }
 
-test('image provides agent HOME even for docker exec', () => {
-  assert.match(dockerfile, /\bHOME=\/home\/agent\b/);
+test('image provides persistent HOME even for docker exec', () => {
+  assert.match(dockerfile, /\bHOME=\/app\/\.home\b/);
+});
+
+test('agent account home is inside the persistent mount', () => {
+  assert.match(dockerfile, /useradd[^\n;]*-d \/app\/\.home/);
+});
+
+test('the legacy home path remains a compatibility alias', () => {
+  assert.match(dockerfile, /ln -s \/app\/\.home \/home\/agent/);
+});
+
+test('pnpm store does not depend on an ephemeral user config file', () => {
+  assert.match(dockerfile, /PNPM_CONFIG_STORE_DIR=\/app\/\.cache\/pnpm-store/);
 });
 
 test('Maven has an actual localRepository setting, not only an unused environment name', () => {

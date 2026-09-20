@@ -93,7 +93,8 @@ docker compose logs -f          # 第一次会装插件，等几秒
 ```
 /app          ← 宿主目录，唯一出入口
   ├── ...     ← 你的代码（工作区）
-  ├── .dsh/   ← profile、插件、凭证、日志
+  ├── .dsh/   ← DSH profile、插件、凭证、日志
+  ├── .home/  ← agent HOME：Git/gh/SSH 配置、用户级工具
   └── .cache/ ← cargo/go/pip/npm/maven/gradle/uv 缓存
 ```
 
@@ -125,7 +126,8 @@ dsh-entrypoint: FATAL 插件安装失败: @lolkda/dsh-web-lan@^0.1.0
 
 - root 初始化仅依赖 `CHOWN`、`SETUID`、`SETGID`；没有为修权限恢复 `DAC_OVERRIDE` 或全部能力。
 - `setpriv` 后主进程使用非 root UID，并开启 `no-new-privileges`；插件也只在降权后安装。
-- 同时重设 `HOME=/home/agent`，让 pnpm 读到正确的 store 配置，而不是继续使用 `/root`。
+- 统一 `HOME` 和账户家目录为 `/app/.home`，`/home/agent` 仅作兼容链接；pnpm store 通过 `PNPM_CONFIG_STORE_DIR` 固定在 `/app/.cache/pnpm-store`，不再需要覆盖用户的 pnpm 配置文件。
+- 调整账户 UID 时会避免 `usermod` 隐式遍历私有 HOME。已有 HOME 必须属于目标 UID/GID；不一致时会在修改账户或 APP 属主前明确失败，普通启动不递归 chown 私有 HOME。若要改变已有数据的 UID/GID，应先停容器并在宿主完成显式离线迁移，不要放宽私钥权限。
 - 只修改挂载点本身，以及**不可写的受管状态目录**；不递归 chown 工程代码和 `.git`，健康状态目录重启时不递归扫描。
 - 只读挂载、无法修复的 ACL/NFS 权限、受管路径被普通文件或符号链接占用，会在插件安装前明确失败。`DSH_PLUGINS_REQUIRED=0` 不能跳过这些错误。
 - 已有混合属主的深层文件仍需按报错路径处理；入口不会为发现每一个历史 root 文件而每次扫描整个缓存。
@@ -430,6 +432,46 @@ docker compose up -d --force-recreate
 
 镜像升级后需重建容器；如果部署面板保留了旧的源环境变量，应清除覆盖或更新其值。CI 会检查工具实际解析的源，并验证国内源下载与切回官方源的行为。
 
+## HOME 持久化与旧版本迁移
+
+`agent` 的 `HOME` 和 Linux 账户家目录现在都是 `/app/.home`；`/home/agent` 是指向它的兼容链接。工作目录仍是 `/app`，仍然只需挂载一个宿主目录。
+
+- 新建 HOME 使用 `0700` 私有权限；[初始化模块](home-init.mjs) 只补缺失的系统 Shell 默认文件，不覆盖已有文件或跟随已有文件链接写入。
+- Git/gh/SSH 的磁盘配置、凭据文件和 HOME 下的用户级安装现在随 `/app` 保留。pnpm store 仍单独放在 `/app/.cache/pnpm-store`；可用 `PNPM_CONFIG_STORE_DIR` 显式覆盖，已有用户配置文件不会被改写。
+- 系统 Git 默认忽略 `/.home/` 和 `/.home-import.*/`，仓库也排除了这些目录。自定义 `core.excludesFile` 可能覆盖系统默认值；不要强制把 HOME 或导出的凭据提交到 Git。
+- 这不保存 `ssh-agent` 解锁状态、`git credential-cache` 的内存数据，也不能恢复已过期/撤销的 token。`/usr/local` 的额外全局安装仍不属于 HOME 持久化范围。
+
+### 首次升级前，先从旧容器导出 HOME
+
+**新镜像无法自动找回已经删除的旧容器层。** 如果旧容器还在，应在首次启动新版之前，在 Linux Docker 宿主机执行 [迁移脚本](scripts/migrate-home.sh)。脚本只读取旧容器 `/home/agent` 的文件用于复制，不会打印 token、私钥或配置内容，不会删除源容器。
+
+以下假设已把新版仓库或迁移脚本放到部署机，挂载目录为 `/home/docker/agent`（其他目录请替换）：
+
+```bash
+docker pull ghcr.io/lolkda/dsh-dev-image:latest
+docker stop dsh-agent
+sudo bash scripts/migrate-home.sh dsh-agent /home/docker/agent
+
+# 只有迁移成功后才继续；保留旧容器便于回看配置
+docker rename dsh-agent "dsh-agent-old-$(date +%Y%m%d-%H%M%S)"
+docker run -d --name dsh-agent --user 0:0 --restart unless-stopped --network host \
+  -v /home/docker/agent:/app \
+  ghcr.io/lolkda/dsh-dev-image:latest dsh web --no-open
+```
+
+若显式使用 `AGENT_UID/AGENT_GID`，用 `sudo env AGENT_UID=... AGENT_GID=... bash scripts/migrate-home.sh ...` 传入相同值。脚本仅支持在实际 Docker 宿主机、通过本机 Unix socket 迁移未挂载的旧容器层 HOME；源 HOME 的挂载、根链接、privileged/SYS_ADMIN 容器和 Docker 内部数据路径会被拒绝，避免源/目标重叠及递归自复制。
+
+迁移先导出到源挂载范围之外的私有临时目录，再放入目标文件系统暂存；需要较大临时空间时可显式指定 `TMPDIR`，但它不能位于源容器挂载范围内。使用旧镜像作为无网络、只读根文件系统的权限修复工具时，APP 只读，仅导出副本可写，并仅授予 `CHOWN`、`DAC_READ_SEARCH`。最终由宿主 root 原子发布 `0700` 的目标目录。正常服务启动仍只需要原来的 `CHOWN/SETUID/SETGID`，没有增加 `DAC_OVERRIDE`。
+
+**目标 `.home` 已存在时，脚本会拒绝覆盖。** 不要直接删除它：先备份并决定如何合并。迁移失败时源容器不受影响，暂存目录会保留并打印位置；可先重新启动旧容器。若旧容器早已删除，只能重新登录一次，之后的磁盘状态才会由新布局保留。之后的常规镜像升级无需再次迁移。
+
+日常登录工具请使用 agent，而不是 root：
+
+```bash
+docker exec -it --user agent dsh-agent bash
+# 例如在该终端里运行 gh auth login / SSH 配置命令
+```
+
 ## 缓存与卷
 
 只有一个 bind mount，没有额外的命名卷：
@@ -437,7 +479,8 @@ docker compose up -d --force-recreate
 | 宿主位置（默认） | 容器位置 | 内容 |
 |---|---|---|
 | `/srv/agent` | `/app` | 工作区代码 |
-| `/srv/agent/.dsh` | `/app/.dsh` | profile、插件、凭证、日志 |
+| `/srv/agent/.dsh` | `/app/.dsh` | DSH profile、插件、凭证、日志 |
+| `/srv/agent/.home` | `/app/.home`（兼容 `/home/agent`） | agent 的用户配置、磁盘凭据和用户级安装 |
 | `/srv/agent/.cache` | `/app/.cache` | 各语言缓存和 pnpm store |
 
 `docker compose down` 删除容器，不删除这些宿主数据；加 `-v` **也不会删除 bind mount**。要验证全新状态，请换一个空的 `AGENT_HOME`，不要把清理命名卷误当作重置。
@@ -509,8 +552,9 @@ npm 上 `latest` = `0.1.5-rc.2`，比 `alpha` = `0.1.6-alpha.2` 还旧，`npm i 
 ```bash
 bash tests/entrypoint.test.sh
 node --test tests/*.test.mjs
-for script in entrypoint.sh tests/*.sh; do bash -n "$script"; done
-shellcheck entrypoint.sh tests/*.sh
+for script in entrypoint.sh scripts/*.sh tests/*.sh; do bash -n "$script"; done
+shellcheck entrypoint.sh scripts/*.sh tests/*.sh
+node --check home-init.mjs
 ```
 
 [CLI 回归测试](tests/entrypoint.test.sh) 实际执行入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束。它们**不能替代 Linux 的 UID、capability、挂载权限测试**。

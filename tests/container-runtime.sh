@@ -24,10 +24,25 @@ docker run --rm --network none --user 0 --entrypoint /bin/bash \
     --mount "type=bind,source=$scratch,target=/cases" "$image" -euc '
         chmod 755 /cases
         mkdir -p /cases/root /cases/private /cases/legacy/.dsh \
-            /cases/readonly /cases/symlink /cases/explicit /cases/injected/.cache/cargo/bin
+            /cases/readonly /cases/symlink /cases/explicit /cases/injected/.cache/cargo/bin \
+            /cases/existing-home/.home/.ssh /cases/uid-change-home/.home/.ssh /cases/home-file /cases/home-link
         chmod 755 /cases/root /cases/legacy /cases/readonly /cases/symlink /cases/explicit /cases/injected
         chown 12345:12346 /cases/private
         chmod 700 /cases/private
+        printf preserved-home > /cases/existing-home/.home/.ssh/fixture-key
+        printf "# custom shell\n" > /cases/existing-home/.home/.bashrc
+        chown -R 12345:12346 /cases/existing-home
+        chmod 755 /cases/existing-home
+        chmod 700 /cases/existing-home/.home /cases/existing-home/.home/.ssh
+        chmod 600 /cases/existing-home/.home/.ssh/fixture-key
+        chmod 640 /cases/existing-home/.home/.bashrc
+        printf unchanged-private-home > /cases/uid-change-home/.home/.ssh/fixture-key
+        chown -R 1000:1000 /cases/uid-change-home
+        chmod 755 /cases/uid-change-home
+        chmod 700 /cases/uid-change-home/.home /cases/uid-change-home/.home/.ssh
+        chmod 600 /cases/uid-change-home/.home/.ssh/fixture-key
+        touch /cases/home-file/.home
+        ln -s /tmp /cases/home-link/.home
         touch /cases/root/project-file /cases/legacy/.dsh/old-state
         chmod 600 /cases/root/project-file /cases/legacy/.dsh/old-state
         chmod 700 /cases/legacy/.dsh
@@ -48,7 +63,12 @@ run_runtime() {
 check='set -euo pipefail
     test "$(/usr/bin/id -u)" = "$EXPECT_UID"
     test "$(/usr/bin/id -g)" = "$EXPECT_GID"
-    test "$HOME" = /home/agent
+    test "$HOME" = /app/.home
+    test "$(getent passwd agent | cut -d: -f6)" = "$HOME"
+    test -L /home/agent
+    test "$(readlink -f /home/agent)" = "$HOME"
+    test "$(stat -c %a "$HOME")" = 700
+    test "$(stat -c %u:%g "$HOME")" = "$EXPECT_UID:$EXPECT_GID"
     test "$PWD" = /app
     test "$(awk '\''$1 == "CapEff:" { print $2 }'\'' /proc/self/status)" = 0000000000000000
     for d in /app/.dsh /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build \
@@ -60,19 +80,61 @@ check='set -euo pipefail
     test "$(stat -c %u:%g /app/.dsh/probe/write)" = "$EXPECT_UID:$EXPECT_GID"
 '
 
+persist_write='
+    mkdir -p "$HOME/.config/gh" "$HOME/.ssh"
+    printf fixture-gh > "$HOME/.config/gh/hosts.yml"
+    printf fixture-key > "$HOME/.ssh/fixture-key"
+    chmod 700 "$HOME/.ssh"
+    chmod 600 "$HOME/.config/gh/hosts.yml" "$HOME/.ssh/fixture-key"
+    git config --global user.name "Persistent Fixture"
+    printf "%s" "$(< /etc/hostname)" > "$HOME/container-fixture-id"
+    git -C /app init -q
+    git -C /app check-ignore -q .home/.config/gh/hosts.yml
+'
+persist_check='
+    test "$(< "$HOME/.config/gh/hosts.yml")" = fixture-gh
+    test "$(< "$HOME/.ssh/fixture-key")" = fixture-key
+    test "$(git config --global user.name)" = "Persistent Fixture"
+    test "$(stat -c %a "$HOME/.ssh")" = 700
+    test "$(stat -c %a "$HOME/.ssh/fixture-key")" = 600
+    test "$(< "$HOME/container-fixture-id")" != "$(< /etc/hostname)"
+'
+
 printf '\n=== root-owned 0755, minimal capabilities ===\n'
-run_runtime "type=bind,source=$scratch/root,target=/app" "$check
+run_runtime "type=bind,source=$scratch/root,target=/app" "$check$persist_write
     test \"\$(stat -c %u /app/project-file)\" = 0" \
     -e "EXPECT_UID=$image_uid" -e "EXPECT_GID=$image_gid"
 
-printf '\n=== healthy restart, keep project ownership ===\n'
-run_runtime "type=bind,source=$scratch/root,target=/app" "$check
+printf '\n=== new container preserves HOME and project ownership ===\n'
+run_runtime "type=bind,source=$scratch/root,target=/app" "$check$persist_check
     test \"\$(stat -c %u /app/project-file)\" = 0" \
     -e "EXPECT_UID=$image_uid" -e "EXPECT_GID=$image_gid"
 
 printf '\n=== non-root-owned 0700, follow UID and GID ===\n'
 run_runtime "type=bind,source=$scratch/private,target=/app" "$check" \
     -e EXPECT_UID=12345 -e EXPECT_GID=12346
+
+printf '\n=== existing private HOME under a different image UID ===\n'
+run_runtime "type=bind,source=$scratch/existing-home,target=/app" "$check
+    test \"\$(< /app/.home/.ssh/fixture-key)\" = preserved-home
+    test \"\$(stat -c %a /app/.home/.ssh/fixture-key)\" = 600
+    test \"\$(stat -c %a /app/.home/.bashrc)\" = 640" \
+    -e EXPECT_UID=12345 -e EXPECT_GID=12346
+
+printf '\n=== changing a private HOME owner is rejected without mutation ===\n'
+if run_runtime "type=bind,source=$scratch/uid-change-home,target=/app" \
+    'echo UNEXPECTED_COMMAND' -e AGENT_UID=1001 -e AGENT_GID=1001 > "$scratch/uid-change.log" 2>&1; then
+    printf 'Implicit private HOME UID migration unexpectedly succeeded\n' >&2; exit 1
+fi
+grep -q '显式离线迁移' "$scratch/uid-change.log"
+if grep -q UNEXPECTED_COMMAND "$scratch/uid-change.log"; then exit 1; fi
+docker run --rm --network none --user 0 --entrypoint /bin/bash \
+    --mount "type=bind,source=$scratch/uid-change-home,target=/case,readonly" "$image" -euc '
+        test "$(stat -c %u /case)" = 1000
+        test "$(stat -c %u /case/.home)" = 1000
+        test "$(stat -c %a /case/.home/.ssh/fixture-key)" = 600
+        test "$(< /case/.home/.ssh/fixture-key)" = unchanged-private-home
+    '
 
 printf '\n=== explicit identity, ignore forged dropped marker ===\n'
 run_runtime "type=bind,source=$scratch/explicit,target=/app" "$check" \
@@ -113,10 +175,22 @@ if grep -q UNEXPECTED_COMMAND "$scratch/symlink.log"; then
     printf 'Command ran despite a managed symlink\n' >&2; exit 1
 fi
 
+for home_case in home-file home-link; do
+    printf '\n=== malformed persistent HOME: %s ===\n' "$home_case"
+    if run_runtime "type=bind,source=$scratch/$home_case,target=/app" \
+        'echo UNEXPECTED_COMMAND' > "$scratch/$home_case.log" 2>&1; then
+        printf 'Malformed HOME unexpectedly accepted\n' >&2; exit 1
+    fi
+    grep -q FATAL "$scratch/$home_case.log"
+    if grep -q UNEXPECTED_COMMAND "$scratch/$home_case.log"; then exit 1; fi
+done
+
 printf '\n=== root UID configuration is rejected ===\n'
 if run_runtime "type=bind,source=$scratch/root,target=/app" true \
     -e AGENT_UID=0 > "$scratch/uid.log" 2>&1; then
     printf 'UID 0 unexpectedly accepted\n' >&2; exit 1
 fi
 grep -q 'FATAL.*AGENT_UID' "$scratch/uid.log"
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+bash "$root/tests/home-migration-runtime.sh" "$image"
 printf '\n=== ALL RUNTIME CONTRACTS PASSED ===\n'

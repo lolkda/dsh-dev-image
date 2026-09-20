@@ -41,7 +41,9 @@ main() {
         docker run --rm "${caps[@]}" -e DSH_PLUGINS= "$image" bash "$mode" '
             set -euo pipefail
             test "$(id -u)" != 0
-            test "$HOME" = /home/agent
+            test "$HOME" = /app/.home
+            test "$(getent passwd agent | cut -d: -f6)" = "$HOME"
+            test "$(readlink -f /home/agent)" = "$HOME"
             for tool in python node npm yarn pnpm go rustc cargo java javac mvn gradle \
                         git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
                 command -v "$tool" >/dev/null

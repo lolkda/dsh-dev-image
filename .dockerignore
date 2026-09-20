@@ -1,4 +1,4 @@
-# 构建上下文只需要 entrypoint.sh（唯一的本地文件）；语言运行时全部来自
+# 构建上下文只需要入口和 HOME 初始化模块；语言运行时全部来自
 # multi-stage 的 --from，或从官方 tarball 下载。其余一律忽略：上下文更小、
 # 构建更快，也不会把本地文件误打进镜像。
 **
@@ -6,3 +6,4 @@
 !compose.yml
 !README.md
 !entrypoint.sh
+!home-init.mjs

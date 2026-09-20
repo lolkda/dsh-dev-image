@@ -1,3 +1,7 @@
+# 持久化用户状态 / 迁移暂存，可能含凭据，不能提交
+/.home/
+/.home-import.*/
+
 # 本地覆盖
 .env
 .env.local

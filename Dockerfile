@@ -350,7 +350,11 @@ RUN set -eux; ln -sfn /usr/bin/fdfind /usr/local/bin/fd; fd --version
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     groupadd -g "${USER_GID}" agent; \
-    useradd -m -u "${USER_UID}" -g agent -s /bin/bash agent; \
+    useradd -M -u "${USER_UID}" -g agent -d /app/.home -s /bin/bash agent; \
+    mkdir -p /home /etc/dsh; \
+    ln -s /app/.home /home/agent; \
+    printf '/.home/\n/.home-import.*/\n' > /etc/dsh/gitignore; \
+    git config --system core.excludesFile /etc/dsh/gitignore; \
     mkdir -p /app/.dsh \
              /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build \
              /app/.cache/pip /app/.cache/npm /app/.cache/m2 \
@@ -360,25 +364,9 @@ RUN set -eux; \
     git config --system core.autocrlf false; \
     git config --system init.defaultBranch main
 
-# -----------------------------------------------------------------------------
-# pnpm store 放进 /app
-#
-# 为什么：dsh 的插件装在 $DSH_HOME/profiles/<name>/node_modules，也就是
-# /app/.dsh/... 里。如果 store 留在默认的 /home/agent/.local/share/pnpm/store
-# （镜像层），store 和 node_modules 就【跨文件系统】了 —— pnpm 的硬链接会
-# 退化成整份复制，白占空间还慢。放同一文件系统下才是它设计的样子。
-#
-# 注意 pnpm 12 的配置方式跟 npm 不一样，实测确认过：
-#     .npmrc 里的 store-dir          → 无效
-#     npm_config_store_dir 环境变量  → 无效
-#     --store-dir CLI 参数           → 有效
-#     $XDG_CONFIG_HOME/pnpm/config.yaml 里的 storeDir 键  → 有效 ← 用这个
-# -----------------------------------------------------------------------------
-RUN set -eux; \
-    mkdir -p /home/agent/.config/pnpm; \
-    printf 'storeDir: /app/.cache/pnpm-store\n' > /home/agent/.config/pnpm/config.yaml; \
-    chown -R agent:agent /home/agent/.config; \
-    cat /home/agent/.config/pnpm/config.yaml
+# pnpm 12 的 store 使用末尾的 PNPM_CONFIG_STORE_DIR 原生环境变量。
+# 不再向用户 HOME 写入预置 config.yaml，避免挂载遮蔽或覆盖迁移来的用户配置。
+# store 仍在 /app/.cache/pnpm-store，与 profile 的 node_modules 同一文件系统。
 
 # -----------------------------------------------------------------------------
 # DeepSeek Harness + pnpm
@@ -427,10 +415,12 @@ RUN set -eux; \
 # 为什么不在 build 期登记，见 entrypoint.sh 头部注释（$DSH_HOME 是卷，会遮蔽）。
 # -----------------------------------------------------------------------------
 COPY entrypoint.sh /usr/local/bin/dsh-entrypoint
+COPY home-init.mjs /usr/local/bin/home-init.mjs
 RUN set -eux; \
     chmod 0755 /usr/local/bin/dsh-entrypoint; \
     bash -n /usr/local/bin/dsh-entrypoint; \
-    for c in setpriv usermod groupmod stat; do \
+    node --check /usr/local/bin/home-init.mjs; \
+    for c in setpriv usermod groupmod stat getent node; do \
         command -v "$c" >/dev/null || { echo "entrypoint 依赖缺失: $c" >&2; exit 1; }; \
     done
 
@@ -462,7 +452,9 @@ ENV npm_config_registry=https://registry.npmmirror.com \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
 
-ENV HOME=/home/agent \
+ENV HOME=/app/.home \
+    PNPM_CONFIG_STORE_DIR=/app/.cache/pnpm-store \
+    PATH=${PATH}:/app/.home/.local/bin:/app/.home/bin \
     DSH_PLUGINS="@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0"
 
 WORKDIR /app
