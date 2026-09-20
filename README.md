@@ -400,6 +400,34 @@ docker compose build --build-arg JDK_VERSION=25
 >
 > **Node / Rust 换版本**要注意 glibc：源镜像必须继续取 bookworm 变体（glibc 2.36）。换成 `-noble` / `-trixie` 会因为 glibc 2.39 / 2.41 > 2.36 而炸。
 
+## Node / Python 国内依赖源
+
+镜像构建中的 npm/pip 安装，以及容器内日常安装依赖，默认使用以下 HTTPS 源：
+
+| 工具 | 默认源 | Docker 环境覆盖变量 |
+|---|---|---|
+| npm | `https://registry.npmmirror.com` | `npm_config_registry` |
+| pnpm 12 | `https://registry.npmmirror.com` | `PNPM_CONFIG_REGISTRY` |
+| Yarn Classic | `https://registry.npmmirror.com` | `YARN_REGISTRY` |
+| pip | `https://mirrors.aliyun.com/pypi/simple/` | `PIP_INDEX_URL` |
+| uv | `https://mirrors.aliyun.com/pypi/simple/` | `UV_DEFAULT_INDEX` |
+
+[pnpm 12 不再读取 `npm_config_*`](https://pnpm.io/configuring#environment-variables)，[uv 也有独立的索引配置](https://docs.astral.sh/uv/concepts/indexes/)，所以不能只设置 npm/pip 就认为其他工具也生效。这里没有关闭证书校验，也没有添加 `trusted-host`。
+
+两份 Compose 提供两个输入，一次切换对应工具组。例如切回官方源：
+
+```bash
+NPM_REGISTRY=https://registry.npmjs.org/ \
+PYPI_INDEX_URL=https://pypi.org/simple/ \
+docker compose up -d --force-recreate
+```
+
+直接 `docker run` 时，用表中的变量逐项覆盖，例如 `-e PNPM_CONFIG_REGISTRY=https://registry.npmjs.org/`。npm、pnpm、Yarn 是独立变量；pip 和 uv 也是独立变量。项目显式指定的索引、scoped registry 或锁文件中的固定下载 URL 仍可能优先于默认源。
+
+这些设置只改变包管理器的依赖源，不改变 Node/Python 的版本、基础镜像来源，也不代理 GitHub、浏览器驱动等独立二进制下载。Docker 拉取镜像的加速需要另行配置 Docker，不由 npm/pip 源控制。
+
+镜像升级后需重建容器；如果部署面板保留了旧的源环境变量，应清除覆盖或更新其值。CI 会检查工具实际解析的源，并验证国内源下载与切回官方源的行为。
+
 ## 缓存与卷
 
 只有一个 bind mount，没有额外的命名卷：

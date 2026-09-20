@@ -24,6 +24,11 @@ services:
 
     environment:
       TZ: ${TZ:-Asia/Shanghai}
+      npm_config_registry: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+      PNPM_CONFIG_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+      YARN_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+      PIP_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+      UV_DEFAULT_INDEX: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
       AGENT_UID: ${AGENT_UID:-}
       AGENT_GID: ${AGENT_GID:-}
       DSH_PROFILE: ${DSH_PROFILE:-web}

@@ -49,6 +49,16 @@ main() {
             python -V; node -v; npm -v; pnpm --version
             go version; rustc -V; cargo -V; cargo clippy -V; rustfmt --version
             java -version; mvn -v; gradle --version
+            npm_registry="$(npm config get registry)"
+            pnpm_registry="$(pnpm config get registry)"
+            yarn_registry="$(yarn config get registry)"
+            pip_index="$(python -m pip config get :env:.index-url)"
+            test "${npm_registry%/}" = "${npm_config_registry%/}"
+            test "${pnpm_registry%/}" = "${PNPM_CONFIG_REGISTRY%/}"
+            test "${yarn_registry%/}" = "${YARN_REGISTRY%/}"
+            test "${pip_index%/}" = "${PIP_INDEX_URL%/}"
+            printf "Verified package sources: npm=%s pnpm=%s yarn=%s pip=%s\n" \
+                "$npm_registry" "$pnpm_registry" "$yarn_registry" "$pip_index"
             case "$(pnpm store path)" in
                 /app/.cache/pnpm-store/*) ;;
                 *) echo "pnpm store escaped /app" >&2; exit 1 ;;
@@ -58,6 +68,44 @@ main() {
             cargo new --name smoke --vcs none "$project/rust" -q
             cargo build --manifest-path "$project/rust/Cargo.toml" -q
             "$project/rust/target/debug/smoke"
+        '
+    done
+
+    # 默认国内源和显式切回官方源都做真实解析/下载；不改系统 Python 环境。
+    for source_mode in domestic official; do
+        source_env=()
+        if [[ "$source_mode" == official ]]; then
+            source_env=(-e npm_config_registry=https://registry.npmjs.org/
+                        -e PNPM_CONFIG_REGISTRY=https://registry.npmjs.org/
+                        -e YARN_REGISTRY=https://registry.npmjs.org/
+                        -e PIP_INDEX_URL=https://pypi.org/simple/
+                        -e UV_DEFAULT_INDEX=https://pypi.org/simple/)
+        fi
+        docker run --rm "${caps[@]}" -e DSH_PLUGINS= "${source_env[@]}" "$image" bash -euc '
+            npm_registry="$(npm config get registry)"
+            pnpm_registry="$(pnpm config get registry)"
+            yarn_registry="$(yarn config get registry)"
+            pip_index="$(python -m pip config get :env:.index-url)"
+            test "${npm_registry%/}" = "${npm_config_registry%/}"
+            test "${pnpm_registry%/}" = "${PNPM_CONFIG_REGISTRY%/}"
+            test "${yarn_registry%/}" = "${YARN_REGISTRY%/}"
+            test "${pip_index%/}" = "${PIP_INDEX_URL%/}"
+            directory="$(mktemp -d)"
+            python -m pip download --disable-pip-version-check --no-deps --no-cache-dir \
+                --dest "$directory/wheels" packaging==25.0
+            test -f "$directory/wheels/packaging-25.0-py3-none-any.whl"
+            printf "packaging==25.0\n" > "$directory/requirements.in"
+            uv --no-cache pip compile --quiet --emit-index-url \
+                --output-file "$directory/requirements.txt" "$directory/requirements.in"
+            grep -Fx "packaging==25.0" "$directory/requirements.txt"
+            if [[ "${UV_DEFAULT_INDEX%/}" != https://pypi.org/simple ]]; then
+                grep -F -- "${UV_DEFAULT_INDEX%/}" "$directory/requirements.txt"
+            elif grep -Fq mirrors.aliyun.com "$directory/requirements.txt"; then
+                echo "uv ignored the official-index override" >&2
+                exit 1
+            fi
+            printf "Verified dependency indexes: pip=%s uv=%s pnpm=%s\n" \
+                "$pip_index" "$UV_DEFAULT_INDEX" "$pnpm_registry"
         '
     done
 

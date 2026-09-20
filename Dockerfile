@@ -293,6 +293,17 @@ RUN set -eux; \
     go version
 
 # -----------------------------------------------------------------------------
+# Node / Python 依赖源：构建阶段与容器运行阶段共用，可由 docker run -e 覆盖。
+# pnpm 12 不再读取 npm_config_*；uv 也不读取 pip 的源配置，必须分别设置。
+# 放在工具链下载之后，避免改包源时让前面的大型下载层失效。
+# 仅配置 HTTPS 源，不关闭证书校验；不改变基础镜像或独立二进制的下载地址。
+ENV npm_config_registry=https://registry.npmmirror.com \
+    PNPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+    YARN_REGISTRY=https://registry.npmmirror.com \
+    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
+
+# -----------------------------------------------------------------------------
 # uv（Python 包管理器）
 #
 # 用 pip 装而不是 `curl | sh`：pip 会校验 PyPI 的哈希，比管道执行远端脚本干净。
