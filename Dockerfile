@@ -454,7 +454,7 @@ RUN set -eux; \
 #     docker compose exec --user agent agent bash
 # -----------------------------------------------------------------------------
 ENV HOME=/home/agent \
-    DSH_PLUGINS=@lolkda/dsh-web-lan@^0.1.0
+    DSH_PLUGINS="@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0"
 
 WORKDIR /app
 EXPOSE 3080

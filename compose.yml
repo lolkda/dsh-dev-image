@@ -32,7 +32,7 @@ services:
       AGENT_GID: ${AGENT_GID:-}
       DSH_PROFILE: ${DSH_PROFILE:-web}
       # 用 - 而不是 :-：显式空值必须真的禁用安装。
-      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan@^0.1.0}
+      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0}
       DSH_PLUGINS_REQUIRED: ${DSH_PLUGINS_REQUIRED:-1}
       # IP 通常自动可信；通过域名访问时在这里补域名。
       DSH_WEB_TRUSTED_HOSTS: ${DSH_WEB_TRUSTED_HOSTS:-}

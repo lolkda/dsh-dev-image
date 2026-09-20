@@ -27,7 +27,7 @@ services:
       AGENT_UID: ${AGENT_UID:-}
       AGENT_GID: ${AGENT_GID:-}
       DSH_PROFILE: ${DSH_PROFILE:-web}
-      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan@^0.1.0}
+      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0}
       DSH_PLUGINS_REQUIRED: ${DSH_PLUGINS_REQUIRED:-1}
       DSH_WEB_TRUSTED_HOSTS: ${DSH_HOST:-127.0.0.1}
 

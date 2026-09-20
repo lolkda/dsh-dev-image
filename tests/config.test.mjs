@@ -7,6 +7,14 @@ import { test } from 'node:test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const dockerfile = read('Dockerfile');
+const defaultPlugins = '@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0';
+
+test('image defaults contain both pinned plugin versions', () => {
+  const expression = dockerfile.match(/^\s*DSH_PLUGINS=(.+)$/m)?.[1];
+  assert.ok(expression, 'Missing image plugin defaults');
+  const value = expression.startsWith('"') ? JSON.parse(expression) : expression;
+  assert.equal(value, defaultPlugins);
+});
 
 // 这些是轻量配置 contract；真实权限、YAML 展开和完整镜像另在 Docker CI 中验证。
 for (const path of ['compose.yml', 'compose.bridge.yml']) {
@@ -24,7 +32,7 @@ for (const path of ['compose.yml', 'compose.bridge.yml']) {
       });
       assert.ifError(result.error);
       assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout, value ?? '@lolkda/dsh-web-lan@^0.1.0');
+      assert.equal(result.stdout, value ?? defaultPlugins);
     });
   }
 

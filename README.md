@@ -353,13 +353,26 @@ profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**�
 
 `DSH_PLUGINS` 未设置时使用镜像/Compose 默认插件；显式置空会跳过安装。注意：跳过安装**不会卸载已有 profile 内的插件**；新 profile 若没有 LAN 插件，也不会按默认方案对外监听。
 
+### 默认插件与升级
+
+镜像和两份 Compose 的默认列表固定为：
+
+| 插件 | 版本 | 用途 |
+|---|---|---|
+| `@lolkda/dsh-web-lan` | `0.1.1` | Web 局域网访问与相关设置 |
+| [`dsh-auto-thinking-levels`](https://github.com/lolkda/dsh-auto-thinking-levels) | `0.1.0` | 为 `llm-pi-ai` 路由补充缺失的思考等级，不覆盖已有档位或 `reasoningEfforts: false` |
+
+这里的“内置”沿用启动时自动安装并登记到 profile 的方式，不代表首次启动无需联网。自动思考等级插件只处理 `llm-pi-ai`，不保证其他 adapter 或上游模型支持所有等级。
+
 ### 加 / 换插件
 
-改 `compose.yml` 的 `DSH_PLUGINS`（空格分隔）：
+在 [compose.yml](compose.yml) 中覆盖 `DSH_PLUGINS`（空格分隔，需要额外插件时追加到末尾）：
 
 ```yaml
-DSH_PLUGINS: "@lolkda/dsh-web-lan@^0.1.0 @lolkda/dsh-skills-manager@^0.1.0"
+DSH_PLUGINS: "@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0"
 ```
+
+升级旧容器时必须重新创建容器。若部署面板或旧配置保留了原来的 `DSH_PLUGINS` 环境变量，请清除覆盖值或改为上面的新列表；只拉取镜像、只重启旧容器不会更新已经保存的环境变量。启动用户仍应为 `0:0`，入口完成准备后会自动降权。
 
 离线环境设 `DSH_PLUGINS_REQUIRED=0`，装不上也继续启动（默认 `1`，装不上直接退出，不静默降级）。
 

@@ -95,8 +95,17 @@ main() {
         const fs = require("node:fs");
         const profile = `${process.env.DSH_HOME}/profiles/web`;
         const pkg = JSON.parse(fs.readFileSync(`${profile}/package.json`, "utf8"));
-        assert.ok(pkg.dependencies?.["@lolkda/dsh-web-lan"]);
-        assert.ok(fs.existsSync(`${profile}/node_modules/@lolkda/dsh-web-lan/package.json`));
+        const plugins = {
+            "@lolkda/dsh-web-lan": "0.1.1",
+            "dsh-auto-thinking-levels": "0.1.0",
+        };
+        for (const [name, version] of Object.entries(plugins)) {
+            assert.ok(pkg.dependencies?.[name], name + " is missing from dependencies");
+            assert.ok(pkg.dsh?.profile?.bundles?.includes(name), name + " is not registered as a bundle");
+            const installed = JSON.parse(fs.readFileSync(profile + "/node_modules/" + name + "/package.json", "utf8"));
+            assert.equal(installed.version, version, name + " version mismatch");
+            console.log("Verified plugin: " + name + "@" + installed.version);
+        }
         assert.notEqual(process.getuid(), 0);
     '
     printf '\n=== FULL IMAGE AND AUTHENTICATED WEB STARTUP PASSED ===\n'
