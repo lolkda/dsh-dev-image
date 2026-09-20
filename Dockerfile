@@ -293,17 +293,6 @@ RUN set -eux; \
     go version
 
 # -----------------------------------------------------------------------------
-# Node / Python 依赖源：构建阶段与容器运行阶段共用，可由 docker run -e 覆盖。
-# pnpm 12 不再读取 npm_config_*；uv 也不读取 pip 的源配置，必须分别设置。
-# 放在工具链下载之后，避免改包源时让前面的大型下载层失效。
-# 仅配置 HTTPS 源，不关闭证书校验；不改变基础镜像或独立二进制的下载地址。
-ENV npm_config_registry=https://registry.npmmirror.com \
-    PNPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
-    YARN_REGISTRY=https://registry.npmmirror.com \
-    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
-
-# -----------------------------------------------------------------------------
 # uv（Python 包管理器）
 #
 # 用 pip 装而不是 `curl | sh`：pip 会校验 PyPI 的哈希，比管道执行远端脚本干净。
@@ -464,6 +453,15 @@ RUN set -eux; \
 # 代价是 `docker exec` 进去默认也是 root；要 agent 身份就：
 #     docker compose exec --user agent agent bash
 # -----------------------------------------------------------------------------
+# 运行时包源放在工具链安装之后：固定版本从官方构建，用户依赖默认走国内镜像。
+# 镜像站可能尚未同步新版本（曾实际缺少 uv 0.12.17），不因此降级工具链。
+# pnpm 12 与 uv 分别需要自己的配置变量；所有源均保留 HTTPS 校验。
+ENV npm_config_registry=https://registry.npmmirror.com \
+    PNPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+    YARN_REGISTRY=https://registry.npmmirror.com \
+    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
+
 ENV HOME=/home/agent \
     DSH_PLUGINS="@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0"
 

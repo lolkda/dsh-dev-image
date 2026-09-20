@@ -402,7 +402,7 @@ docker compose build --build-arg JDK_VERSION=25
 
 ## Node / Python 国内依赖源
 
-镜像构建中的 npm/pip 安装，以及容器内日常安装依赖，默认使用以下 HTTPS 源：
+容器内日常安装依赖，默认使用以下 HTTPS 源：
 
 | 工具 | 默认源 | Docker 环境覆盖变量 |
 |---|---|---|
@@ -411,6 +411,8 @@ docker compose build --build-arg JDK_VERSION=25
 | Yarn Classic | `https://registry.npmmirror.com` | `YARN_REGISTRY` |
 | pip | `https://mirrors.aliyun.com/pypi/simple/` | `PIP_INDEX_URL` |
 | uv | `https://mirrors.aliyun.com/pypi/simple/` | `UV_DEFAULT_INDEX` |
+
+**工具链构建与运行时依赖源分开。** 镜像内固定版本的 DSH、pnpm、uv 等仍从官方源构建；国内源在最后作为运行时默认值写入镜像。原因是镜像站存在同步延迟，实际遇到过阿里云 PyPI 缺少 `uv==0.12.17`，不能因此让构建失败或降低工具版本。日常安装若遇到镜像缺包，也可显式切回官方源，不会静默换源。
 
 [pnpm 12 不再读取 `npm_config_*`](https://pnpm.io/configuring#environment-variables)，[uv 也有独立的索引配置](https://docs.astral.sh/uv/concepts/indexes/)，所以不能只设置 npm/pip 就认为其他工具也生效。这里没有关闭证书校验，也没有添加 `trusted-host`。
 

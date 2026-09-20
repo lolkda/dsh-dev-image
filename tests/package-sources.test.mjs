@@ -11,6 +11,13 @@ const sources = [
   { input: 'PYPI_INDEX_URL', mirror: 'https://mirrors.aliyun.com/pypi/simple/', official: 'https://pypi.org/simple/', keys: ['PIP_INDEX_URL', 'UV_DEFAULT_INDEX'] },
 ];
 
+test('runtime mirrors are applied after pinned toolchain bootstrap', () => {
+  const bootstrap = dockerfile.indexOf('npm install -g "@deepseek-ai/dsh@${DSH_VERSION}"');
+  const runtimeDefaults = dockerfile.indexOf('ENV npm_config_registry=');
+  assert.ok(bootstrap >= 0);
+  assert.ok(runtimeDefaults > bootstrap, 'A lagging mirror must not block installation of the pinned toolchain');
+});
+
 // 回归点：移除任何一个工具自己的配置，或误把 pnpm/uv 当作读取 npm/pip 的变量。
 for (const { keys, mirror } of sources) {
   for (const key of keys) {
