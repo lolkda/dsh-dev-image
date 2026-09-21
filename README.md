@@ -1,6 +1,6 @@
 # dev-agent
 
-通用开发镜像：Python / Node / Java / Rust / Go / git / DeepSeek Harness，跑在 Linux 服务器的 Docker 里，本地零安装。
+通用开发镜像：Python / Node / TypeScript / Java / Rust / Go / git / DeepSeek Harness，跑在 Linux 服务器的 Docker 里，本地零安装。
 
 ## 包含什么
 
@@ -11,6 +11,8 @@
 | base | Debian 12 bookworm, glibc 2.36 | `python:3.12-slim-bookworm` |
 | Python | 3.12.x | base 自带 |
 | Node | 24（24.21.0，含 npm / yarn / corepack） | `node:24-bookworm-slim` |
+| TypeScript（`tsc`） | 7.0.2 | npm（原生编译器，按架构安装） |
+| `tsx` | 4.23.15 | npm（直接运行 TS / TSX） |
 | Rust | 1.98.1 | `rust:1.98.1-slim-bookworm` |
 | Go | 1.27.1 | go.dev 官方 tarball |
 | Java | Temurin 24.0.2+12 | Adoptium API tarball |
@@ -227,10 +229,30 @@ docker compose exec --user agent agent bash
 
 ```bash
 docker run --rm -e DSH_PLUGINS= ghcr.io/lolkda/dsh-dev-image:latest bash -lc \
-  'python -V && node -v && pnpm -v && go version && rustc -V && java -version && git --version && dsh --help >/dev/null && echo ALL-OK'
+  'python -V && node -v && pnpm -v && tsc --version && tsx --version && go version && rustc -V && java -version && git --version && dsh --help >/dev/null && echo ALL-OK'
 ```
 
 镜像构建过程本身有两道检查：每条 COPY 后面立刻验证该工具链，最后再跑一次全链路冒烟。任何一条路径不对，`docker compose build` 当场失败，不会拖到运行时。
+
+### TypeScript：检查、编译与直接运行
+
+预装的 `tsc` 和 `tsx` 位于镜像层的 `/usr/local`，不需要启动时再安装，也不会被 `/app` 挂载遮蔽。普通 Shell 和登录 Shell 都可使用：
+
+```bash
+tsc --version
+tsx --version
+
+# 在有 tsconfig.json 的项目根目录中：
+tsc --noEmit -p tsconfig.json   # 只做类型检查
+tsc -p tsconfig.json            # 按项目配置编译
+tsx src/index.ts               # 直接运行；同样支持 .tsx
+```
+
+`tsx` 只转译并运行，**不做类型检查**，请配合 `tsc --noEmit`。Node 24 自带的类型擦除也不能替代编译器，`enum` 等需要转译的语法可交给 `tsx`。
+
+默认 TypeScript 7 使用原生编译器，不再附带旧版 `tsserver`。依赖旧版 TypeScript 工具链的项目应在自己的依赖中锁定兼容版本；可用 `TYPESCRIPT_VERSION` 构建参数调整镜像默认版本。
+
+全局工具用于开箱即用，不替代项目依赖：项目应按需声明 `typescript`、`tsx` 和 `@types/node`，通过 npm scripts 使用项目锁定的版本。镜像不全局安装框架或项目类型声明。
 
 ---
 
@@ -396,6 +418,8 @@ docker compose build --build-arg JDK_VERSION=25
 | `JDK_VERSION` | `24` | Adoptium 的 feature version |
 | `DSH_VERSION` | `0.1.6-alpha.2` | npm 版本号或 dist-tag |
 | `PNPM_VERSION` | `12.4.2` | — |
+| `TYPESCRIPT_VERSION` | `7.0.2` | TypeScript 编译器 `tsc` |
+| `TSX_VERSION` | `4.23.15` | TS / TSX 脚本运行器 |
 | `USER_UID` / `USER_GID` | `1000` | 和挂载目录属主对齐 |
 
 > **Java 版本建议**：24 是 non-LTS，早已 EOL。当前 LTS 是 **25**，最新 feature release 是 26。走 Adoptium 路线换版本**不需要动 base**，改 `JDK_VERSION` 即可。
@@ -450,7 +474,7 @@ docker compose up -d --force-recreate
 
 ```bash
 docker compose exec --user agent agent bash
-npm install -g typescript
+npm install -g eslint
 pnpm add -g @biomejs/biome
 uv tool install ruff
 ```
@@ -621,7 +645,7 @@ bash tests/container-runtime.sh dsh-dev-image:verify
 bash tests/image-smoke.sh dsh-dev-image:verify
 ```
 
-[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 Rust 编译、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 用默认与自定义 UID 运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec --user agent`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
+[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 TypeScript/TSX 与 Rust 编译运行、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程。[TypeScript 验收](tests/typescript-smoke.sh) 在非 root 的两种 Shell 中验证 ESM 跨模块导入、`enum` 转译、无框架 TSX 和类型错误拒绝，不下载项目依赖。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 用默认与自定义 UID 运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec --user agent`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
 
 DSH 对匿名 `/` 请求返回 `401` 是正常鉴权行为，不能用匿名 `curl --fail` 判断服务是否启动。验收从该测试容器的启动日志取 token，跟随登录重定向并保留 cookie，最终必须获得 `200`；不会为了测试通过而关闭鉴权。[Web 登录回归](tests/web-ready.test.mjs) 使用真实 HTTP 服务覆盖此流程及失败分支。
 

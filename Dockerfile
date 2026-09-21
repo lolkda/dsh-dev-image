@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # =============================================================================
-#  dev-agent —— 通用开发镜像（Python / Node / Java / Rust / Go / git / DSH）
+#  dev-agent —— 通用开发镜像（Python / Node / TypeScript / Java / Rust / Go / git / DSH）
 #
 #  base 选 python:3.12-slim-bookworm 而不是裸 debian:bookworm-slim，是刻意的：
 #
@@ -32,6 +32,8 @@ ARG GO_VERSION=1.27.1
 ARG JDK_VERSION=24
 ARG DSH_VERSION=0.1.6-alpha.2
 ARG PNPM_VERSION=12.4.2
+ARG TYPESCRIPT_VERSION=7.0.2
+ARG TSX_VERSION=4.23.15
 ARG MAVEN_VERSION=3.9.16
 ARG GRADLE_VERSION=9.7.1
 ARG UV_VERSION=0.12.17
@@ -368,20 +370,26 @@ RUN set -eux; \
 # store 仍在 /app/.cache/pnpm-store，与 profile 的 node_modules 同一文件系统。
 
 # -----------------------------------------------------------------------------
-# DeepSeek Harness + pnpm
+# DeepSeek Harness + pnpm + TypeScript
 #
 # 不要用 @latest：npm 上 latest=0.1.5-rc.2，比 alpha=0.1.6-alpha.2 还旧，
 # `npm i -g @deepseek-ai/dsh` 会装到旧版本。这里默认锁到与本地一致的版本。
 #
 # pnpm 是必需的：`dsh plugin --profile <p> add <spec>` 的实现就是"把剩余参数
 # 转发给 profile 目录里的 pnpm"。没有 pnpm 就装不了任何插件。
+#
+# tsc 负责类型检查/编译；tsx 负责直接运行 TS/TSX，不代替类型检查。
+# TypeScript 7 使用原生编译器，npm 按架构选择二进制；不再提供旧版 tsserver。
+# 在运行时 prefix 和国内源生效前安装到 /usr/local，避免首次挂载 /app 后丢失。
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     npm install -g "pnpm@${PNPM_VERSION}"; \
     npm install -g "@deepseek-ai/dsh@${DSH_VERSION}"; \
+    npm install -g "typescript@${TYPESCRIPT_VERSION}" "tsx@${TSX_VERSION}"; \
     npm cache clean --force; \
     test -x "$(command -v dsh)"; \
-    test -x "$(command -v pnpm)"
+    test -x "$(command -v pnpm)"; \
+    tsc --version; tsx --version
 
 # -----------------------------------------------------------------------------
 # 全链路冒烟：任一工具链没装好，构建就在这里失败，不会拖到运行时才发现
@@ -395,6 +403,7 @@ RUN set -eux; \
         $sh 'set -euo pipefail; \
               python -V; \
              node -v; npm -v; yarn --version; pnpm --version; \
+             tsc --version; tsx --version; \
              go version; \
              rustc -V; cargo -V; cargo clippy -V; rustfmt --version; \
              java -version; javac -version; mvn -v; gradle --version; \

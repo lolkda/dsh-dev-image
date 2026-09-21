@@ -29,7 +29,8 @@ cleanup() {
 }
 
 main() {
-    local image="${1:?usage: image-smoke.sh IMAGE}" mode port ready attempt startup_log
+    local image="${1:?usage: image-smoke.sh IMAGE}" mode port ready attempt startup_log root
+    root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
     # EXIT trap 需要在 main 返回后仍能读取这两个清理目标。
     web_id=''
     cookie_jar="$(mktemp)"
@@ -38,17 +39,20 @@ main() {
     local caps=(--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID
                 --security-opt no-new-privileges:true)
     for mode in -ec -lec; do
-        docker run --rm "${caps[@]}" -e DSH_PLUGINS= "$image" bash "$mode" '
+        docker run --rm "${caps[@]}" \
+            --mount "type=bind,src=$root/tests/typescript-smoke.sh,dst=/tmp/typescript-smoke.sh,readonly" \
+            -e DSH_PLUGINS= "$image" bash "$mode" '
             set -euo pipefail
             test "$(id -u)" != 0
             test "$HOME" = /app/.home
             test "$(getent passwd agent | cut -d: -f6)" = "$HOME"
             test -d "$HOME" && test ! -L "$HOME"
-            for tool in python node npm yarn pnpm go rustc cargo java javac mvn gradle \
+            for tool in python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
                         git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
                 command -v "$tool" >/dev/null
             done
             python -V; node -v; npm -v; pnpm --version
+            bash /tmp/typescript-smoke.sh
             go version; rustc -V; cargo -V; cargo clippy -V; rustfmt --version
             java -version; mvn -v; gradle --version
             npm_registry="$(npm config get registry)"
@@ -118,8 +122,6 @@ main() {
     '
 
     # 在独立 bind mount 中用默认与自定义 UID 安装 CLI，跨容器验证并清理缓存。
-    local root
-    root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
     bash "$root/tests/user-cli-runtime.sh" "$image"
 
     # 临时启动默认 Web/插件；只发布 runner 的 loopback 端口，不在 CI 打开浏览器。

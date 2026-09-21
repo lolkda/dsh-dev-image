@@ -37,7 +37,7 @@ for (const path of ['compose.yml', 'compose.bridge.yml']) {
   }
 
   test(`${path}: Dockerfile owns toolchain version defaults`, () => {
-    assert.doesNotMatch(source, /^\s+(GO_VERSION|JDK_VERSION|DSH_VERSION|PNPM_VERSION|USER_UID|USER_GID):/m);
+    assert.doesNotMatch(source, /^\s+(GO_VERSION|JDK_VERSION|DSH_VERSION|PNPM_VERSION|TYPESCRIPT_VERSION|TSX_VERSION|USER_UID|USER_GID):/m);
   });
 
   test(`${path}: identity overrides reach the container`, () => {
@@ -85,6 +85,28 @@ test('user CLI defaults cannot redirect build-time installation of pinned image 
   assert.ok(bootstrap >= 0);
   assert.ok(userDefaults > bootstrap, 'User CLI prefix must be enabled only after the image toolchain is installed');
 });
+
+// 回归点：删除预装、取消版本锁定，或把安装移到运行时 prefix/镜像源之后。
+for (const [name, versionArg] of [['typescript', 'TYPESCRIPT_VERSION'], ['tsx', 'TSX_VERSION']]) {
+  test(`image preinstalls pinned ${name} before runtime package-manager defaults`, () => {
+    const version = dockerfile.match(new RegExp(`^ARG ${versionArg}=(\\S+)$`, 'm'))?.[1] ?? '';
+    assert.match(version, /^\d+\.\d+\.\d+$/, `Missing pinned ${versionArg}`);
+    const source = dockerfile.replace(/\\\r?\n\s*/g, ' ');
+    const spec = `"${name}@\${${versionArg}}"`;
+    const install = source.split(/[;\n]/).find(command => /\bnpm install -g\b/.test(command) && command.includes(spec));
+    assert.ok(install, `Missing global installation of ${spec}`);
+    for (const setting of ['npm_config_registry=', 'npm_config_prefix=']) {
+      assert.ok(source.indexOf(setting) > source.indexOf(install), `${name} must be installed before ${setting}`);
+    }
+  });
+}
+
+for (const command of ['tsc --version', 'tsx --version']) {
+  test(`build smoke checks ${command} in both shell modes`, () => {
+    const body = dockerfile.match(/\$sh '([^']+)'/)?.[1] ?? '';
+    assert.ok(body.includes(command), `Missing build-time ${command}`);
+  });
+}
 
 test('image provides persistent HOME even for docker exec', () => {
   assert.match(dockerfile, /\bHOME=\/app\/\.home\b/);
