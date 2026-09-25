@@ -60,6 +60,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #
 # apt 只负责系统库和命令行工具（gh 够用；maven / gradle / yq 都不够，见下）。
 #
+# adb：装 Debian 归档的 `adb` 二进制包（源码包 android-platform-tools，bookworm
+# 里是 1:29.0.6-28，amd64 / arm64 都有）。它落成 /usr/bin/adb，而系统 PATH 本来
+# 就含 /usr/bin，所以不需要 alias、wrapper 或额外 PATH 编排。不装完整 Android
+# SDK，也不装 fastboot；"CLI 可用"与"USB 真机授权"是两件事，见 README。
+#
 # build-essential 是必需的，不只是为了编译：它提供 libstdc++6 和 libgcc_s，
 # 而 node、rustc、libjvm.so 都动态链接这两个；rust / go(cgo) 还需要一个 cc
 # 才能链接产物。
@@ -80,6 +85,7 @@ RUN set -eux; \
         ripgrep fd-find file tree sqlite3 \
         iproute2 dnsutils netcat-openbsd lsof bc man-db tmux \
         shellcheck git-lfs \
+        adb \
         cmake ninja-build autoconf automake libtool \
         gdb strace \
         gh; \
@@ -413,6 +419,7 @@ RUN set -eux; \
              cmake --version; ninja --version; \
              sqlite3 --version; tmux -V; shellcheck --version; \
              gh --version; gdb --version; strace -V; \
+             adb version; \
              for c in xxd file tree nc dig ss lsof bc man; do command -v "$c" >/dev/null; done; \
              dsh --help > /dev/null'; \
     done; \

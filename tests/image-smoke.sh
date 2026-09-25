@@ -47,10 +47,17 @@ main() {
             test "$HOME" = /app/.home
             test "$(getent passwd agent | cut -d: -f6)" = "$HOME"
             test -d "$HOME" && test ! -L "$HOME"
-            for tool in python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
+            for tool in adb python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
                         git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
                 command -v "$tool" >/dev/null
             done
+            # adb 只要求 CLI：在 subshell 内先切到 /tmp 再调用，证明不依赖工具目录、alias、
+            # 交互 shell 或入口对 PATH 的额外处理。entrypoint.sh 会无条件 cd "$APP_DIR"，
+            # 所以给 docker run 加 --workdir 并不足以证明"任意目录"，必须在这里自己切；
+            # 用 subshell 是为了不改动本块其余断言（pnpm store / cargo build）依赖的 cwd。
+            adb_from_tmp="$(cd /tmp && test "$PWD" = /tmp && adb version)"
+            printf "Verified adb CLI from /tmp: %s\n" "$adb_from_tmp"
+            printf "%s\n" "$adb_from_tmp" | grep -i "^Android Debug Bridge version " >/dev/null
             python -V; node -v; npm -v; pnpm --version
             bash /tmp/typescript-smoke.sh
             go version; rustc -V; cargo -V; cargo clippy -V; rustfmt --version
@@ -165,6 +172,12 @@ main() {
         }
         assert.notEqual(process.getuid(), 0);
     '
+    # 裸 docker exec：exec 不经过入口（entrypoint 不会 cd "$APP_DIR"），也不经登录 shell
+    # 或任何 alias；非 root 用户 --workdir /tmp 下无 shell 包装直接调用 adb。
+    # 用消费全部输出的 grep（不用 -q）：避免 pipefail 下匹配即退出导致上游 SIGPIPE。
+    docker exec --user agent --workdir /tmp "$web_id" adb version \
+        | grep -i "^Android Debug Bridge version " >/dev/null
+    printf 'Verified adb CLI over bare docker exec from /tmp\n'
     printf '\n=== FULL IMAGE AND AUTHENTICATED WEB STARTUP PASSED ===\n'
 }
 

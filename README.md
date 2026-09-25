@@ -36,6 +36,7 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 | 进程 / 会话 | `ps` / `top` `tmux` | 长任务挂 tmux，断线不丢 |
 | 构建 | `cmake` `ninja` `autoconf` `automake` `libtool` | C / C++ 项目 |
 | 调试 | `gdb` `strace` | 需要 `cap_add: SYS_PTRACE`，compose 里已配好 |
+| Android 调试 | `adb` | 设备调试 CLI，来自 Debian 归档包而非完整 SDK；[用法与边界见下](#adbandroid-调试桥) |
 | 版本控制 | `git` `git-lfs` `gh` | |
 | 其他 | `shellcheck` `bc` `rsync` `zip` / `unzip` | |
 
@@ -229,7 +230,7 @@ docker compose exec --user agent agent bash
 
 ```bash
 docker run --rm -e DSH_PLUGINS= ghcr.io/lolkda/dsh-dev-image:latest bash -lc \
-  'python -V && node -v && pnpm -v && tsc --version && tsx --version && go version && rustc -V && java -version && git --version && dsh --help >/dev/null && echo ALL-OK'
+  'python -V && node -v && pnpm -v && tsc --version && tsx --version && go version && rustc -V && java -version && git --version && adb version >/dev/null && dsh --help >/dev/null && echo ALL-OK'
 ```
 
 镜像构建过程本身有两道检查：每条 COPY 后面立刻验证该工具链，最后再跑一次全链路冒烟。任何一条路径不对，`docker compose build` 当场失败，不会拖到运行时。
@@ -253,6 +254,29 @@ tsx src/index.ts               # 直接运行；同样支持 .tsx
 默认 TypeScript 7 使用原生编译器，不再附带旧版 `tsserver`。依赖旧版 TypeScript 工具链的项目应在自己的依赖中锁定兼容版本；可用 `TYPESCRIPT_VERSION` 构建参数调整镜像默认版本。
 
 全局工具用于开箱即用，不替代项目依赖：项目应按需声明 `typescript`、`tsx` 和 `@types/node`，通过 npm scripts 使用项目锁定的版本。镜像不全局安装框架或项目类型声明。
+
+### ADB（Android 调试桥）
+
+`adb` 装的是 **Debian 12 bookworm 官方归档**的 [`adb`](https://packages.debian.org/bookworm/adb) 二进制包（源码包 `android-platform-tools`，bookworm 里是 `1:29.0.6-28`，`amd64` / `arm64` 都有），由 `apt-get install --no-install-recommends` 装成 `/usr/bin/adb`（真实二进制在 `/usr/lib/android-sdk/platform-tools/adb`）。系统 `PATH` 本来就含 `/usr/bin`，所以没有 alias、wrapper 或额外 PATH 编排，任意目录、普通/登录 Shell，以及不经 Shell 的 `docker exec` 都能直接用：
+
+```bash
+adb version
+docker compose exec --user agent --workdir /tmp agent adb version
+```
+
+**范围。** 只有 adb 命令行本身：不含完整 Android SDK，不含 `fastboot`。Debian 维护的版本不是 Google 官方最新 Platform Tools。
+
+**重建后生效。** `adb` 在镜像层，不在 `/app` 卷里，所以要重建镜像并重建容器：
+
+```bash
+docker compose up -d --build --force-recreate
+```
+
+`docker build` 之后只 `restart` 旧容器不会换镜像（`docker compose restart` 同理）；上面的命令显式重建容器以使用新镜像。构建时会用 `adb version` 在两条 PATH 路径上各检查一次，装不上就当场失败。
+
+**CLI 可用 ≠ 真机可调试。** 默认 compose 不映射宿主 USB 设备，也不加 `--privileged` 或额外权限；`--no-install-recommends` 同时**没有**装 udev 规则推荐包（`android-sdk-platform-tools-common`）。要让容器里的非 root 用户直连 USB 真机，需要宿主侧的 udev 授权，并把设备显式映射进来（`--device` / `devices:`，由使用者按需决定）。设备端的「USB 调试」开关和 adb 的「允许此电脑调试」授权同样在容器之外。
+
+**不启动 daemon。** 构建期和冒烟只调用 `adb version`：它在客户端本地打印版本，不需要设备，也不会拉起 ADB server。
 
 ---
 
@@ -610,6 +634,7 @@ npm 上 `latest` = `0.1.5-rc.3`，比 `next` = `0.1.7-rc.1` 还旧，`npm i -g @
 
 - **容器里的 profile 是全新的空 profile。** 宿主 `~/.dsh/profiles/web` 里的东西（dshmarket、prompt-manager、skills-manager、`link:` 装的本地插件）不会自动跟过来，只有 `DSH_PLUGINS` 里列的会装。要带全套得另做 seed。
 - **MCP 服务器同理**：它们注册在 profile 的 `cordis.patch.yml` 里，不在容器里。而且 `ida` / `reqable` 是 Windows 宿主上的应用，本来就带不过来；`fastctx` 是纯文件/shell，可以。
+- **`adb` 只有命令本身，默认没有 USB 透传。** 容器未映射宿主 USB 设备，也没装 udev 规则推荐包，真机调试的 udev 授权与设备映射由使用者在宿主侧按需处理；默认 compose 不为此扩大权限。详见 [ADB（Android 调试桥）](#adbandroid-调试桥)。
 - 默认没有 docker 访问能力，容器内不能 `docker build` / `docker compose up`。
 - 默认只支持 `amd64` / `arm64`，其他架构会在 Java / Go 那两步显式报错退出。
 
@@ -626,7 +651,7 @@ sh -n cli-env.sh
 node --check home-init.mjs
 ```
 
-[CLI 回归测试](tests/entrypoint.test.sh) 实际执行入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置与可移植入口用例仍可在 Git Bash 运行。[HOME 路径回归](tests/home-path.test.mjs) 在 Linux 上使用真实 Unix socket HTTP 测试服务验证元数据协议与父目录链接拒绝，需要 `curl` 和 `jq`，不需要 Docker。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
+[CLI 回归测试](tests/entrypoint.test.sh) 实际执行入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置与可移植入口用例仍可在 Git Bash 运行。[HOME 路径回归](tests/home-path.test.mjs) 在 Linux 上使用真实 Unix socket HTTP 测试服务验证元数据协议与父目录链接拒绝，需要 `curl` 和 `jq`，不需要 Docker。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
 
 Linux + Docker 下的快速权限验收：
 
@@ -645,7 +670,7 @@ bash tests/container-runtime.sh dsh-dev-image:verify
 bash tests/image-smoke.sh dsh-dev-image:verify
 ```
 
-[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 TypeScript/TSX 与 Rust 编译运行、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程。[TypeScript 验收](tests/typescript-smoke.sh) 在非 root 的两种 Shell 中验证 ESM 跨模块导入、`enum` 转译、无框架 TSX 和类型错误拒绝，不下载项目依赖。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 用默认与自定义 UID 运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec --user agent`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
+[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 TypeScript/TSX 与 Rust 编译运行、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程；同时在**非 root** 的两种 Shell 里从 `/tmp` 执行 `adb version`，再用裸 `docker exec --user agent --workdir /tmp` 复核一次，全程不启动 ADB server（构建期也在两条 PATH 路径上各跑一次 `adb version`）。[TypeScript 验收](tests/typescript-smoke.sh) 在非 root 的两种 Shell 中验证 ESM 跨模块导入、`enum` 转译、无框架 TSX 和类型错误拒绝，不下载项目依赖。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 用默认与自定义 UID 运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec --user agent`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
 
 DSH 对匿名 `/` 请求返回 `401` 是正常鉴权行为，不能用匿名 `curl --fail` 判断服务是否启动。验收从该测试容器的启动日志取 token，跟随登录重定向并保留 cookie，最终必须获得 `200`；不会为了测试通过而关闭鉴权。[Web 登录回归](tests/web-ready.test.mjs) 使用真实 HTTP 服务覆盖此流程及失败分支。
 
