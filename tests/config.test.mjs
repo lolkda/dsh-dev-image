@@ -7,14 +7,27 @@ import { test } from 'node:test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const dockerfile = read('Dockerfile');
-const defaultPlugins = '@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0';
+const defaultPlugins = '@lolkda/dsh-web-lan dsh-auto-thinking-levels@0.1.0';
 
-test('image defaults contain both pinned plugin versions', () => {
+test('image defaults contain the shared plugin list', () => {
   const expression = dockerfile.match(/^\s*DSH_PLUGINS=(.+)$/m)?.[1];
   assert.ok(expression, 'Missing image plugin defaults');
   const value = expression.startsWith('"') ? JSON.parse(expression) : expression;
   assert.equal(value, defaultPlugins);
 });
+
+// web-lan 独立发版：默认列表不写版本号，启动时由 pnpm 解析 registry 最新发布。
+const pluginDefaults = [
+  ['Dockerfile', dockerfile],
+  ['compose.yml', read('compose.yml')],
+  ['compose.bridge.yml', read('compose.bridge.yml')],
+];
+for (const [path, source] of pluginDefaults) {
+  test(`${path}: web-lan default spec carries no version so startup installs the latest release`, () => {
+    assert.match(source, /@lolkda\/dsh-web-lan/);
+    assert.doesNotMatch(source, /@lolkda\/dsh-web-lan@/);
+  });
+}
 
 // 这些是轻量配置 contract；真实权限、YAML 展开和完整镜像另在 Docker CI 中验证。
 for (const path of ['compose.yml', 'compose.bridge.yml']) {

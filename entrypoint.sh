@@ -203,9 +203,12 @@ for dir in "${cli_dirs[@]}"; do
 done
 cd -- "$APP_DIR" || permission_error "$APP_DIR"
 
+# 插件默认不带版本号（装 registry 最新发布），但 pnpm 12 自带 24h 成熟期
+# （minimumReleaseAge=1440）：刚发布的版本会被回退到上一个成熟版本，等于"装最新"
+# 要等一天。只对插件安装关掉它；用户项目里的 pnpm 仍走自己的默认策略。
 for spec in "${plugins[@]}"; do
     log "dsh plugin --profile $profile add $spec"
-    if ! dsh plugin --profile "$profile" add "$spec"; then
+    if ! PNPM_CONFIG_MINIMUM_RELEASE_AGE=0 dsh plugin --profile "$profile" add "$spec"; then
         if [[ "${DSH_PLUGINS_REQUIRED:-1}" == 1 ]]; then
             fatal "插件安装失败：$spec。只有允许缺少插件时才设 DSH_PLUGINS_REQUIRED=0；检查上方原始错误。"
         fi

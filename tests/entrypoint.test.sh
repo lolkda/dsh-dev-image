@@ -8,7 +8,7 @@ trap 'rm -rf -- "$TMP"' EXIT
 
 mkdir -p "$TMP/bin"
 # shellcheck disable=SC2016 # 这些变量由外部 DSH 测试替身执行时展开。
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "$CALLS"\nexit "${PLUGIN_EXIT:-0}"\n' > "$TMP/bin/dsh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "$CALLS"\nif [[ -n "${PLUGIN_ENV:-}" ]]; then printf "%%s" "${PNPM_CONFIG_MINIMUM_RELEASE_AGE-unset}" > "$PLUGIN_ENV"; fi\nexit "${PLUGIN_EXIT:-0}"\n' > "$TMP/bin/dsh"
 chmod +x "$TMP/bin/dsh"
 
 passed=0
@@ -39,7 +39,8 @@ setup_case() {
     export PATH="$TMP/bin:$PATH"
     export DSH_PLUGINS=''
     export DSH_PLUGINS_REQUIRED=1
-    unset AGENT_UID AGENT_GID DSH_ENTRYPOINT_DROPPED PLUGIN_EXIT
+    unset AGENT_UID AGENT_GID DSH_ENTRYPOINT_DROPPED PLUGIN_EXIT PLUGIN_ENV
+    unset PNPM_CONFIG_MINIMUM_RELEASE_AGE
     unset CARGO_HOME GOPATH GOMODCACHE GOCACHE PIP_CACHE_DIR npm_config_cache
     unset MAVEN_CONFIG GRADLE_USER_HOME UV_CACHE_DIR
     unset npm_config_prefix NPM_CONFIG_PREFIX PNPM_HOME PNPM_CONFIG_GLOBAL_BIN_DIR PNPM_CONFIG_GLOBAL_DIR
@@ -91,6 +92,21 @@ plugin_specs_do_not_expand_globs() {
     touch "$APP_DIR/plugin-local"
     (cd "$APP_DIR" && bash "$ROOT/entrypoint.sh" true)
     test "$(tail -n 1 "$CALLS")" = 'plugin-*'
+}
+
+plugin_install_ignores_the_maturity_cutoff() {
+    setup_case
+    export DSH_PLUGINS='@lolkda/dsh-web-lan' PLUGIN_ENV="$CASE_DIR/plugin-env"
+    bash "$ROOT/entrypoint.sh" true
+    # pnpm 12 默认 24h 成熟期会把刚发布的版本回退掉，插件安装必须绕开它。
+    test "$(< "$PLUGIN_ENV")" = 0
+}
+
+maturity_cutoff_override_stays_out_of_the_command() {
+    setup_case
+    export DSH_PLUGINS='@example/plugin@1.0.0'
+    bash "$ROOT/entrypoint.sh" bash -c 'printf "%s" "${PNPM_CONFIG_MINIMUM_RELEASE_AGE-unset}" > "$APP_DIR/command-env"'
+    test "$(< "$APP_DIR/command-env")" = unset
 }
 
 invalid_uid_is_rejected() {
@@ -218,6 +234,8 @@ run_case 'reject an empty command' empty_command_is_error
 run_case 'required plugin failure prevents command execution' plugin_failure_blocks_command
 run_case 'optional plugin failure allows command execution' optional_plugin_failure_allows_command
 run_case 'preserve literal plugin specs instead of expanding globs' plugin_specs_do_not_expand_globs
+run_case 'install plugins without the pnpm maturity cutoff' plugin_install_ignores_the_maturity_cutoff
+run_case 'keep the maturity cutoff override out of the main command' maturity_cutoff_override_stays_out_of_the_command
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 ((failed == 0))

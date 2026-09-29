@@ -113,7 +113,7 @@ docker compose logs -f          # 第一次会装插件，等几秒
 
 ```
 Error: EACCES: permission denied, mkdir '/app/.dsh'
-dsh-entrypoint: FATAL 插件安装失败: @lolkda/dsh-web-lan@^0.1.0
+dsh-entrypoint: FATAL 插件安装失败：@lolkda/dsh-web-lan
 ```
 
 原因：`/app` 是宿主目录挂进来的，而**目录不存在时 Docker 会以 `root:root` 创建它**，容器内 UID 1000 的 `agent` 连建子目录都做不到。
@@ -403,21 +403,27 @@ profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**�
 
 ### 默认插件与升级
 
-镜像和两份 Compose 的默认列表固定为：
+镜像和两份 Compose 的默认列表是：
 
 | 插件 | 版本 | 用途 |
 |---|---|---|
-| `@lolkda/dsh-web-lan` | `0.1.1` | Web 局域网访问与相关设置 |
+| `@lolkda/dsh-web-lan` | 不锁定：每次启动装 registry 最新发布 | Web 局域网访问与相关设置 |
 | [`dsh-auto-thinking-levels`](https://github.com/lolkda/dsh-auto-thinking-levels) | `0.1.0` | 为 `llm-pi-ai` 路由补充缺失的思考等级，不覆盖已有档位或 `reasoningEfforts: false` |
+
+`@lolkda/dsh-web-lan` 刻意不写版本号。它独立于镜像发版（写这份说明时 registry 上已经是 `0.2.0`，而镜像过去锁的是 `0.1.1`）：锁死版本意味着插件发新版后，只拉镜像、只重启容器都不会更新，只能改 `DSH_PLUGINS` 重建镜像。不写版本时，每次启动都由 `pnpm add <包名>` 解析 registry 当前的 latest，镜像不必为了插件升级重新发布。
+
+**入口会关掉 pnpm 的新版本成熟期**（[entrypoint.sh](entrypoint.sh) 里 `PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）。pnpm 12 自带 24 小时 `minimumReleaseAge`（默认 1440 分钟），会把"刚发布、还不够成熟"的版本回退到上一个成熟版本 —— 实测 web-lan `0.2.0` 发布 3 小时时，裸装解析到的仍是 `0.1.1`。要求"装最新"就得绕开它，否则"不指定版本"实际等价于"装一天前的最新版"。这个覆盖只作用于 `DSH_PLUGINS` 的安装命令，容器里用户项目的 pnpm 安装仍走 pnpm 自己的默认策略。
+
+代价说清楚：**同一个镜像在不同时间启动可能装到不同版本**，上游发大版本（含破坏性改动）也会被直接吃进来；registry 不可达时按 `DSH_PLUGINS_REQUIRED` 处理（默认直接退出）。要可复现就在 `DSH_PLUGINS` 里写死版本。
 
 这里的“内置”沿用启动时自动安装并登记到 profile 的方式，不代表首次启动无需联网。自动思考等级插件只处理 `llm-pi-ai`，不保证其他 adapter 或上游模型支持所有等级。
 
 ### 加 / 换插件
 
-在 [compose.yml](compose.yml) 中覆盖 `DSH_PLUGINS`（空格分隔，需要额外插件时追加到末尾）：
+在 [compose.yml](compose.yml) 中覆盖 `DSH_PLUGINS`（空格分隔，需要额外插件时追加到末尾；版本号可写可不写）：
 
 ```yaml
-DSH_PLUGINS: "@lolkda/dsh-web-lan@0.1.1 dsh-auto-thinking-levels@0.1.0"
+DSH_PLUGINS: "@lolkda/dsh-web-lan dsh-auto-thinking-levels@0.1.0"
 ```
 
 升级旧容器时必须重新创建容器。若部署面板或旧配置保留了原来的 `DSH_PLUGINS` 环境变量，请清除覆盖值或改为上面的新列表；只拉取镜像、只重启旧容器不会更新已经保存的环境变量。启动用户仍应为 `0:0`，入口完成准备后会自动降权。

@@ -157,17 +157,22 @@ main() {
     docker exec --user agent "$web_id" node -e '
         const assert = require("node:assert/strict");
         const fs = require("node:fs");
+        const { execFileSync } = require("node:child_process");
         const profile = `${process.env.DSH_HOME}/profiles/web`;
         const pkg = JSON.parse(fs.readFileSync(`${profile}/package.json`, "utf8"));
+        // web-lan 默认不带版本号，镜像就该装到 registry 当前的 latest；写死版本号
+        // 只会放过"镜像里还是旧插件"的情况。查询走镜像内的 registry 配置，与安装同源。
+        const latestWebLan = execFileSync("npm", ["view", "@lolkda/dsh-web-lan", "version"], { encoding: "utf8" }).trim();
+        assert.match(latestWebLan, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, "unexpected registry answer: " + latestWebLan);
         const plugins = {
-            "@lolkda/dsh-web-lan": "0.1.1",
+            "@lolkda/dsh-web-lan": latestWebLan,
             "dsh-auto-thinking-levels": "0.1.0",
         };
         for (const [name, version] of Object.entries(plugins)) {
             assert.ok(pkg.dependencies?.[name], name + " is missing from dependencies");
             assert.ok(pkg.dsh?.profile?.bundles?.includes(name), name + " is not registered as a bundle");
             const installed = JSON.parse(fs.readFileSync(profile + "/node_modules/" + name + "/package.json", "utf8"));
-            assert.equal(installed.version, version, name + " version mismatch");
+            assert.equal(installed.version, version, name + ": installed " + installed.version + ", expected " + version);
             console.log("Verified plugin: " + name + "@" + installed.version);
         }
         assert.notEqual(process.getuid(), 0);
