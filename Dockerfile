@@ -30,7 +30,7 @@ FROM python:3.12-slim-bookworm
 
 ARG GO_VERSION=1.27.1
 ARG JDK_VERSION=24
-ARG DSH_VERSION=0.1.7-rc.1
+ARG DSH_VERSION=0.2.0-rc.2
 ARG PNPM_VERSION=12.4.2
 ARG TYPESCRIPT_VERSION=7.0.2
 ARG TSX_VERSION=4.23.15
@@ -378,8 +378,8 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # DeepSeek Harness + pnpm + TypeScript
 #
-# 不要用 @latest：npm 上 latest=0.1.5-rc.3，比 next=0.1.7-rc.1 还旧，
-# `npm i -g @deepseek-ai/dsh` 会装到旧版本。这里默认锁到与本地一致的版本。
+# 不要用 @latest：npm 上 latest=0.1.7-rc.2，比 next=0.2.0-rc.2 还旧，
+# `npm i -g @deepseek-ai/dsh` 会装到旧版本。这里默认锁到当前 next 的版本。
 #
 # pnpm 是必需的：`dsh plugin --profile <p> add <spec>` 的实现就是"把剩余参数
 # 转发给 profile 目录里的 pnpm"。没有 pnpm 就装不了任何插件。
