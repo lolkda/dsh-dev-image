@@ -408,9 +408,9 @@ profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**�
 | 插件 | 版本 | 用途 |
 |---|---|---|
 | `@lolkda/dsh-web-lan` | 不锁定：每次启动装 registry 最新发布 | Web 局域网访问与相关设置 |
-| [`dsh-auto-thinking-levels`](https://github.com/lolkda/dsh-auto-thinking-levels) | `0.1.0` | 为 `llm-pi-ai` 路由补充缺失的思考等级，不覆盖已有档位或 `reasoningEfforts: false` |
+| [`dsh-auto-thinking-levels`](https://github.com/lolkda/dsh-auto-thinking-levels) | 不锁定：每次启动装 registry 最新发布 | 为 `llm-pi-ai` 路由补充缺失的思考等级，不覆盖已有档位或 `reasoningEfforts: false` |
 
-`@lolkda/dsh-web-lan` 刻意不写版本号。它独立于镜像发版（写这份说明时 registry 上已经是 `0.2.0`，而镜像过去锁的是 `0.1.1`）：锁死版本意味着插件发新版后，只拉镜像、只重启容器都不会更新，只能改 `DSH_PLUGINS` 重建镜像。不写版本时，每次启动都由 `pnpm add <包名>` 解析 registry 当前的 latest，镜像不必为了插件升级重新发布。
+两个默认插件都刻意不写版本号。它们独立于镜像发版（写这份说明时 registry 上 web-lan 是 `0.2.0`、auto-thinking-levels 是 `0.1.2`，而镜像过去锁的是 `0.1.1` / `0.1.0`）：锁死版本意味着插件发新版后，只拉镜像、只重启容器都不会更新，只能改 `DSH_PLUGINS` 重建镜像。不写版本时，每次启动都由 `pnpm add <包名>` 解析 registry 当前的 latest，镜像不必为了插件升级重新发布。
 
 **入口会关掉 pnpm 的新版本成熟期**（[entrypoint.sh](entrypoint.sh) 里 `PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）。pnpm 12 自带 24 小时 `minimumReleaseAge`（默认 1440 分钟），会把"刚发布、还不够成熟"的版本回退到上一个成熟版本 —— 实测 web-lan `0.2.0` 发布 3 小时时，裸装解析到的仍是 `0.1.1`。要求"装最新"就得绕开它，否则"不指定版本"实际等价于"装一天前的最新版"。这个覆盖只作用于 `DSH_PLUGINS` 的安装命令，容器里用户项目的 pnpm 安装仍走 pnpm 自己的默认策略。
 
@@ -423,7 +423,7 @@ profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**�
 在 [compose.yml](compose.yml) 中覆盖 `DSH_PLUGINS`（空格分隔，需要额外插件时追加到末尾；版本号可写可不写）：
 
 ```yaml
-DSH_PLUGINS: "@lolkda/dsh-web-lan dsh-auto-thinking-levels@0.1.0"
+DSH_PLUGINS: "@lolkda/dsh-web-lan dsh-auto-thinking-levels"
 ```
 
 升级旧容器时必须重新创建容器。若部署面板或旧配置保留了原来的 `DSH_PLUGINS` 环境变量，请清除覆盖值或改为上面的新列表；只拉取镜像、只重启旧容器不会更新已经保存的环境变量。启动用户仍应为 `0:0`，入口完成准备后会自动降权。

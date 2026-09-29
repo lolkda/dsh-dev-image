@@ -453,8 +453,9 @@ RUN set -eux; \
 # entrypoint 会跳过插件登记，dsh 就绑 127.0.0.1，外面完全连不上 —— 典型的
 # "看起来起来了但用不了"。想关掉就显式 `-e DSH_PLUGINS=`（空值会被尊重）。
 #
-# web-lan 刻意不带版本号：它独立发版，写死版本就只能靠重建镜像更新，旧容器会一直
-# 停在旧插件上。不写版本时每次启动装 registry 最新发布；要固定就覆盖 DSH_PLUGINS。
+# 两个默认插件都刻意不带版本号：它们独立发版，写死版本就只能靠重建镜像更新，
+# 旧容器会一直停在旧插件上。不写版本时每次启动装 registry 最新发布；要固定就覆盖
+# DSH_PLUGINS。
 #
 # CMD 设成 dsh web，所以 `docker run <image>` 开箱即用；要 shell 就
 # `docker run -it <image> bash`（参数会覆盖 CMD）。
@@ -488,7 +489,7 @@ ENV HOME=/app/.home \
     GOBIN=/app/.home/.local/bin \
     PNPM_CONFIG_STORE_DIR=/app/.cache/pnpm-store \
     PATH=/app/.home/.local/bin:/app/.home/.local/share/pnpm/bin:${PATH}:/app/.home/bin \
-    DSH_PLUGINS="@lolkda/dsh-web-lan dsh-auto-thinking-levels@0.1.0"
+    DSH_PLUGINS="@lolkda/dsh-web-lan dsh-auto-thinking-levels"
 
 WORKDIR /app
 EXPOSE 3080
