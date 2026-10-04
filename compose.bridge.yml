@@ -9,9 +9,10 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ghcr.io/lolkda/dsh-dev-image:latest
+    user: "0:0"
     init: true
     command: ["dsh", "web"]
-    # 日常 shell：docker compose -f compose.bridge.yml exec --user agent agent bash
+    # 日常 shell：docker compose -f compose.bridge.yml exec agent bash
     stdin_open: true
     tty: true
     restart: unless-stopped
@@ -29,8 +30,6 @@ services:
       YARN_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
       PIP_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
       UV_DEFAULT_INDEX: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
-      AGENT_UID: ${AGENT_UID:-}
-      AGENT_GID: ${AGENT_GID:-}
       DSH_PROFILE: ${DSH_PROFILE:-web}
       # 插件都不带版本号：每次启动装 registry 最新发布。
       DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan dsh-auto-thinking-levels}
@@ -46,9 +45,11 @@ services:
       - ALL
     cap_add:
       - SYS_PTRACE
+      # 允许在容器内手动调整单个文件归属；入口不自动归权。
       - CHOWN
-      - SETUID
-      - SETGID
+      # 访问旧 UID 的文件，并允许 HOME 权限收紧；不修改文件属主。
+      - DAC_OVERRIDE
+      - FOWNER
 
     logging:
       driver: json-file

@@ -73,7 +73,7 @@ docker run -d --name dsh-agent --restart unless-stopped --network host \
 `DSH_PLUGINS` 默认值和 `CMD` 都已经烤进镜像，所以**不需要 `-e`，也不用写 `dsh web`**。
 
 > `--network host` 不能加 `-p`（会警告且无效）。
-> 宿主目录**不需要**预先 chown，入口会自动处理（见下面「权限」一节）。
+> 普通本地可写挂载**不需要**预先 chown；容器统一使用 root（边界见下面「权限」一节）。
 
 ### 用 compose：多了资源限制和日志上限
 
@@ -97,7 +97,7 @@ docker compose logs -f          # 第一次会装插件，等几秒
 /app          ← 宿主目录，唯一出入口
   ├── ...     ← 你的代码（工作区）
   ├── .dsh/   ← DSH profile、插件、凭证、日志
-  ├── .home/  ← agent HOME：Git/gh/SSH 配置、用户级工具
+  ├── .home/  ← root HOME：Git/gh/SSH 配置、用户级工具
   └── .cache/ ← cargo/go/pip/npm/maven/gradle/uv 缓存
 ```
 
@@ -107,48 +107,24 @@ docker compose logs -f          # 第一次会装插件，等几秒
 
 工具链本体（rustup 工具链、JDK、Go、Maven、Gradle）留在镜像内的 `/usr/local` 和 `/opt`，不占用挂载点 —— 它们不需要持久化，重建镜像本来就该换新的。
 
-### 权限：为什么不需要你先 chown
+### 权限：统一 root，不再切换用户
 
-**你可能会撞上的报错：**
+镜像、入口、插件安装、DSH 主程序及默认 `docker exec` 都使用 **root（UID/GID `0:0`）**，不是通过 sudo 提权；不再创建 agent 系统用户，也不再自动跟随挂载目录的 UID/GID。Compose 服务名仍叫 `agent`，它不是 Linux 用户名。
 
-```
-Error: EACCES: permission denied, mkdir '/app/.dsh'
-dsh-entrypoint: FATAL 插件安装失败：@lolkda/dsh-web-lan
-```
+`/app` 仍为唯一挂载点，`HOME` 和 root 的账户家目录仍为 `/app/.home`，不会切到 `/root` 导致原配置不可见。启动流程为：
 
-原因：`/app` 是宿主目录挂进来的，而**目录不存在时 Docker 会以 `root:root` 创建它**，容器内 UID 1000 的 `agent` 连建子目录都做不到。
-
-[entrypoint.sh](entrypoint.sh) 的启动顺序：
-
-```
-校验配置 → root 调整身份与必要属主 → setpriv 降权
-         → agent 创建并验证状态目录 → 安装插件 → exec 主命令
+```text
+校验 root 身份与配置 → 创建并验证状态/CLI 目录 → 安装插件 → exec 主命令
 ```
 
-**关键点：不能先把 `/app` chown 给 agent，再让 root 创建子目录。** Compose 丢弃了 `DAC_OVERRIDE`，此时 root 也不能写 agent 的 `0755` 目录。这正是上一版“修了一半”后仍可能报错的原因。
+- **不递归 chown**：工程、`.git`、旧 HOME、插件和缓存文件保留原属主。新文件通常属于 root；宿主普通用户直接编辑这些文件可能需要 sudo。
+- **旧 UID 数据可继续访问**：两份 Compose 保留 `cap_drop: ALL`，保留原有的 `SYS_PTRACE/CHOWN`，添加 `DAC_OVERRIDE/FOWNER`。后两者分别允许访问旧属主文件，以及将旧 HOME 权限收紧为 `0700`；不再添加 `SETUID/SETGID`，不启用 privileged。保留 `CHOWN` 只是允许你在容器内手动调整个别文件归属，入口不会自动归权。
+- **仍有明确边界**：root 不绕过只读挂载、NFS root-squash、用户命名空间映射或工具自身的校验。HOME、状态和 CLI 目录被文件/符号链接占用，或不可写时，会在插件和主命令前失败；`DSH_PLUGINS_REQUIRED=0` 不跳过权限错误。
+- **配置与凭据不被覆盖**：仅补缺失的 Shell 默认文件。某些工具（例如 OpenSSH）会检查配置属主，旧 UID 配置即使能读取也可能被工具拒绝；这类文件可在容器内按实际报错单独调整归属，不自动接管整个 HOME。
 
-- root 初始化仅依赖 `CHOWN`、`SETUID`、`SETGID`；没有为修权限恢复 `DAC_OVERRIDE` 或全部能力。
-- `setpriv` 后主进程使用非 root UID，并开启 `no-new-privileges`；插件也只在降权后安装。
-- 统一 `HOME` 和账户家目录为 `/app/.home`，不再创建额外的主目录兼容链接；pnpm store 通过 `PNPM_CONFIG_STORE_DIR` 固定在 `/app/.cache/pnpm-store`，不再需要覆盖用户的 pnpm 配置文件。
-- 调整账户 UID 时会避免 `usermod` 隐式遍历私有 HOME。已有 HOME 必须属于目标 UID/GID；不一致时会在修改账户或 APP 属主前明确失败，普通启动不递归 chown 私有 HOME。若要改变已有数据的 UID/GID，应先停容器并在宿主完成显式离线迁移，不要放宽私钥权限。
-- 只修改挂载点本身，以及**不可写的受管状态目录**；不递归 chown 工程代码和 `.git`，健康状态目录重启时不递归扫描。
-- 只读挂载、无法修复的 ACL/NFS 权限、受管路径被普通文件或符号链接占用，会在插件安装前明确失败。`DSH_PLUGINS_REQUIRED=0` 不能跳过这些错误。
-- 已有混合属主的深层文件仍需按报错路径处理；入口不会为发现每一个历史 root 文件而每次扫描整个缓存。
+**从 agent 版本升级：** 使用新版 Compose，并移除部署面板中的非 root `user`、`AGENT_UID/AGENT_GID` 环境覆盖及 `USER_UID/USER_GID` 构建参数。非 root 入口或直接传入非空旧身份变量会明确报错。已有 `/app/.home` 不需要为了入口检查而更换属主，也不要重新导入或删除它。若保留自定义 `cap_drop: ALL`，需同步加入 `DAC_OVERRIDE/FOWNER`；只改 `user: root` 不够。
 
-**UID 自动跟随**：`/app` 已属于非 root 用户时，采用该 UID/GID；空的 root-owned 挂载点使用镜像构建时的 `USER_UID/USER_GID`（默认 `1000:1000`）。不会自动加入 GID 0。
-
-两份 Compose 都支持显式传入运行身份：
-
-```bash
-AGENT_UID=1001 AGENT_GID=1001 docker compose up -d --force-recreate
-```
-
-UID/GID 必须是非零十进制整数。已有授权目录也可以直接使用 `docker run --user UID:GID`，但该模式不会替你修改属主。
-
-> `docker exec` 默认身份仍是 root，因为镜像入口需要 root 初始化。日常必须使用：
-> `docker compose exec --user agent agent bash`，避免重新制造 root-owned 状态。
->
-> 镜像支持的部署布局固定为 `/app`。入口的 `APP_DIR` 只用于隔离测试等底层调用；仅修改它不会同步镜像 ENV、登录 PATH 与 pnpm 配置，不应拿它更改部署布局。
+> 镜像支持的部署布局固定为 `/app`。入口的 `APP_DIR` 仅用于隔离测试等底层调用；仅修改它不会同步镜像 ENV、账户 HOME 与登录 PATH，不应用它改变部署布局。
 
 然后浏览器直接开：
 
@@ -161,7 +137,7 @@ http://<宿主机IP>:3080
 容器起来就直接跑 `dsh web`，不用再 exec 进去手动启动。要 shell 就另开一个终端：
 
 ```bash
-docker compose exec --user agent agent bash
+docker compose exec agent bash
 ```
 
 想跑别的：
@@ -176,7 +152,7 @@ docker compose run --rm agent dsh tui                     # 终端界面
 ```bash
 docker compose up -d --build --force-recreate
 docker compose logs --tail=100 agent
-docker compose exec --user agent agent sh -c 'id; printf "HOME=%s\n" "$HOME"; test -w /app/.dsh'
+docker compose exec agent sh -c 'id; printf "HOME=%s\n" "$HOME"; test -w /app/.dsh'
 ```
 
 如果改用 CI 已经发布的修正版，而不是本地源码：
@@ -223,7 +199,7 @@ PR 只测试 amd64、不推送；发布时 amd64 和 arm64 都必须通过。`ci
 ## 进去干活
 
 ```bash
-docker compose exec --user agent agent bash
+docker compose exec agent bash
 ```
 
 冒烟测试：
@@ -261,7 +237,7 @@ tsx src/index.ts               # 直接运行；同样支持 .tsx
 
 ```bash
 adb version
-docker compose exec --user agent --workdir /tmp agent adb version
+docker compose exec --workdir /tmp agent adb version
 ```
 
 **范围。** 只有 adb 命令行本身：不含完整 Android SDK，不含 `fastboot`。Debian 维护的版本不是 Google 官方最新 Platform Tools。
@@ -274,7 +250,7 @@ docker compose up -d --build --force-recreate
 
 `docker build` 之后只 `restart` 旧容器不会换镜像（`docker compose restart` 同理）；上面的命令显式重建容器以使用新镜像。构建时会用 `adb version` 在两条 PATH 路径上各检查一次，装不上就当场失败。
 
-**CLI 可用 ≠ 真机可调试。** 默认 compose 不映射宿主 USB 设备，也不加 `--privileged` 或额外权限；`--no-install-recommends` 同时**没有**装 udev 规则推荐包（`android-sdk-platform-tools-common`）。要让容器里的非 root 用户直连 USB 真机，需要宿主侧的 udev 授权，并把设备显式映射进来（`--device` / `devices:`，由使用者按需决定）。设备端的「USB 调试」开关和 adb 的「允许此电脑调试」授权同样在容器之外。
+**CLI 可用 ≠ 真机可调试。** 默认 compose 不映射宿主 USB 设备，也不加 `--privileged` 或额外权限；`--no-install-recommends` 同时**没有**装 udev 规则推荐包（`android-sdk-platform-tools-common`）。要让容器直连 USB 真机，仍须把设备显式映射进来（`--device` / `devices:`，由使用者按需决定）。设备端的「USB 调试」开关和 adb 的「允许此电脑调试」授权同样在容器之外。
 
 **不启动 daemon。** 构建期和冒烟只调用 `adb version`：它在客户端本地打印版本，不需要设备，也不会拉起 ADB server。
 
@@ -395,7 +371,7 @@ node_modules/
 
 profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**。构建期写进镜像的 profile 内容会被（首次启动时还是空的）卷整个遮蔽，症状是"插件装了但没生效"，而且完全静默。
 
-所以登记放在 [entrypoint.sh](entrypoint.sh) 里，卷挂好并降权后才执行。每次启动仍会执行 `pnpm add`：缓存可以复用，但带版本范围的包仍可能查询 registry，**不保证完全离线或永远解析成同一版本**。
+所以登记放在 [entrypoint.sh](entrypoint.sh) 里，卷挂好并完成 root 状态初始化后才执行。每次启动仍会执行 `pnpm add`：缓存可以复用，但带版本范围的包仍可能查询 registry，**不保证完全离线或永远解析成同一版本**。
 
 `DSH_PROFILE` 同时用于插件安装和默认 Web 启动。`dsh web` 会转换为 `dsh --profile <所选 profile>`，其余启动参数保留；非默认 profile 仍需要具备相应的 Web 配置。
 
@@ -426,7 +402,7 @@ profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**�
 DSH_PLUGINS: "@lolkda/dsh-web-lan dsh-auto-thinking-levels"
 ```
 
-升级旧容器时必须重新创建容器。若部署面板或旧配置保留了原来的 `DSH_PLUGINS` 环境变量，请清除覆盖值或改为上面的新列表；只拉取镜像、只重启旧容器不会更新已经保存的环境变量。启动用户仍应为 `0:0`，入口完成准备后会自动降权。
+升级旧容器时必须重新创建容器。若部署面板或旧配置保留了原来的 `DSH_PLUGINS` 环境变量，请清除覆盖值或改为上面的新列表；只拉取镜像、只重启旧容器不会更新已经保存的环境变量。启动用户固定为 `0:0`，入口和主程序全程使用 root，不再降权。
 
 离线环境设 `DSH_PLUGINS_REQUIRED=0`，装不上也继续启动（默认 `1`，装不上直接退出，不静默降级）。
 
@@ -450,7 +426,6 @@ docker compose build --build-arg JDK_VERSION=25
 | `PNPM_VERSION` | `12.4.2` | — |
 | `TYPESCRIPT_VERSION` | `7.0.2` | TypeScript 编译器 `tsc` |
 | `TSX_VERSION` | `4.23.15` | TS / TSX 脚本运行器 |
-| `USER_UID` / `USER_GID` | `1000` | 和挂载目录属主对齐 |
 
 > **Java 版本建议**：24 是 non-LTS，早已 EOL。当前 LTS 是 **25**，最新 feature release 是 26。走 Adoptium 路线换版本**不需要动 base**，改 `JDK_VERSION` 即可。
 >
@@ -500,27 +475,27 @@ docker compose up -d --force-recreate
 | `cargo install` | `/app/.home/.local`（含安装记录） | `/app/.home/.local/bin` | `CARGO_INSTALL_ROOT` |
 | `go install` | 编译缓存仍在 `/app/.cache/go` | `/app/.home/.local/bin` | `GOBIN` |
 
-日常以 `agent` 身份安装，例如：
+日常以 root 身份安装，例如：
 
 ```bash
-docker compose exec --user agent agent bash
+docker compose exec agent bash
 npm install -g eslint
 pnpm add -g @biomejs/biome
 uv tool install ruff
 ```
 
 - **安装与缓存分开**：新 CLI 的安装数据不放在可清理的 `/app/.cache`。不要把本地源码 `link` 安装等同于独立安装；链接指向的源码也必须保留。
-- **两种 Shell 都可用**：[cli-env.sh](cli-env.sh) 在降权后的入口和登录 Shell 中复用，路径在第一次安装前就加入 PATH；镜像 ENV 还覆盖不经过入口的 `docker exec --user agent ...`。pnpm **12** 的命令目录是 `$PNPM_HOME/bin`，不是旧版常见的 `$PNPM_HOME`。
+- **两种 Shell 都可用**：[cli-env.sh](cli-env.sh) 在 root 入口和登录 Shell 中复用，路径在第一次安装前就加入 PATH；镜像 ENV 还覆盖不经过入口的 `docker exec ...`。pnpm **12** 的命令目录是 `$PNPM_HOME/bin`，不是旧版常见的 `$PNPM_HOME`。
 - **不覆盖用户配置**：不会改写已有 npm、pnpm、Yarn 或 Shell 配置文件。表中环境变量按包管理器原生优先级覆盖配置文件；需要自定义时，通过 Docker 的 `-e` 或 Compose 的 `environment` 显式设置相应变量。自定义目录必须是非根目录的绝对路径、不能含冒号，并应位于 `/app` 中才能持久化。改变路径后通过入口或新的登录 Shell 更新 PATH；单独给裸 `docker exec` 改 prefix 不会自动改其 PATH。
 - **不改变项目依赖**：项目内 npm 安装、Python venv 等仍按原方式工作；没有设置强制 `PIP_USER`。Python CLI 推荐 `uv tool install`，或明确使用 `pip install --user`。
-- **权限仍由 agent 负责**：CLI 目录只在降权后创建与验证，root 不递归修改私有 HOME。路径被文件、链接占用或不可写时，在安装插件前失败；旧 HOME 的 UID/GID 变更仍需显式离线迁移。
+- **权限统一为 root**：CLI 目录以 root 创建与验证，既有数据不递归改属主。路径被文件、链接占用或不可写时，在安装插件前失败；旧 UID 数据不再触发 HOME 身份迁移检查。
 - **用户命令优先**：默认用户 CLI 路径排在镜像工具之前；同名命令尽量只交给一个包管理器管理，避免互相覆盖。镜像自带的 DSH、pnpm 和语言运行时仍在构建期安装到镜像层，不会被首次挂载遮蔽。
 
 ### 从旧版本升级
 
 修改默认安装位置不等于搬迁已有工具：
 
-1. 旧容器中装到 `/usr/local` 的额外全局包不会自动复制。删除旧容器前先记录需要保留的包和版本，再以 agent 在新容器中重新安装；旧容器删除后无法从新镜像找回这些包。
+1. 旧容器中装到 `/usr/local` 的额外全局包不会自动复制。删除旧容器前先记录需要保留的包和版本，再以 root 在新容器中重新安装；旧容器删除后无法从新镜像找回这些包。
 2. 旧 Cargo/Go 工具所在的 `/app/.cache/cargo/bin`、`/app/.cache/go/bin` 仍保留在 PATH，重装到新默认目录后才适合清理旧缓存。
 3. 旧 Yarn 全局包默认位于 HOME 的 `.config/yarn/global`；可显式保留 `YARN_GLOBAL_FOLDER=/app/.home/.config/yarn/global`，或按原包列表重新安装到新目录。已有文件不会被入口搬移或覆盖。
 
@@ -528,22 +503,22 @@ uv tool install ruff
 
 ## HOME 持久化与旧版本迁移
 
-`agent` 的 `HOME` 和 Linux 账户家目录现在都是 `/app/.home`，不再创建额外的主目录兼容链接。工作目录仍是 `/app`，仍然只需挂载一个宿主目录。
+root 的 `HOME` 和 Linux 账户家目录现在都是 `/app/.home`，不再创建额外的主目录兼容链接。工作目录仍是 `/app`，仍然只需挂载一个宿主目录。
 
 - 新建 HOME 使用 `0700` 私有权限；[初始化模块](home-init.mjs) 只补缺失的系统 Shell 默认文件，不覆盖已有文件或跟随已有文件链接写入。
 - Git/gh/SSH 的磁盘配置、凭据文件和 HOME 下的用户级安装现在随 `/app` 保留。pnpm store 仍单独放在 `/app/.cache/pnpm-store`；可用 `PNPM_CONFIG_STORE_DIR` 显式覆盖，已有用户配置文件不会被改写。
 - 系统 Git 默认忽略 `/.home/` 和 `/.home-import.*/`，仓库也排除了这些目录。自定义 `core.excludesFile` 可能覆盖系统默认值；不要强制把 HOME 或导出的凭据提交到 Git。
 - 这不保存 `ssh-agent` 解锁状态、`git credential-cache` 的内存数据，也不能恢复已过期/撤销的 token。`/usr/local` 的额外全局安装仍不属于 HOME 持久化范围。
 
-### 首次升级前，先从旧容器导出 HOME
+### 仅旧 HOME 尚未持久化时，先导出旧容器层
 
-**新镜像无法自动找回已经删除的旧容器层。** 如果旧容器还在，应在首次启动新版之前，在 Linux Docker 宿主机执行 [迁移脚本](scripts/migrate-home.sh)。脚本只复制显式指定的旧 HOME，不预设源路径，不会打印 token、私钥或配置内容，不会删除源容器。
+**已有 `/app/.home` 时跳过本节，直接使用原挂载。新镜像无法自动找回已经删除的旧容器层。** 如果旧容器还在，应在首次启动新版之前，在 Linux Docker 宿主机执行 [迁移脚本](scripts/migrate-home.sh)。脚本只复制显式指定的旧 HOME，不预设源路径，不会打印 token、私钥或配置内容，不会删除源容器。
 
 以下假设已把新版仓库放到部署机，宿主机已安装 Docker、`curl` 和 `jq`，挂载目录为 `/home/docker/agent`（其他目录请替换）。若只复制脚本，需将[迁移脚本](scripts/migrate-home.sh)和[路径检查器](scripts/verify-home-path.sh)放在同一目录：
 
 ```bash
 docker pull ghcr.io/lolkda/dsh-dev-image:latest
-# 停止前读取源 HOME；若自定义过启动环境，请核对它与旧进程实际使用的路径一致。
+# 仅针对仍有 agent 用户的旧镜像：停止前读取源 HOME；核对它与旧进程路径一致。
 source_home="$(docker exec --user agent dsh-agent sh -c 'printf "%s" "$HOME"')"
 docker stop dsh-agent
 sudo bash scripts/migrate-home.sh dsh-agent /home/docker/agent "$source_home"
@@ -555,18 +530,18 @@ docker run -d --name dsh-agent --user 0:0 --restart unless-stopped --network hos
   ghcr.io/lolkda/dsh-dev-image:latest dsh web --no-open
 ```
 
-第三个参数 `SOURCE_HOME` 必须明确提供：它是旧容器内非根目录的规范绝对路径，不能包含控制字符、重复分隔符、`.` / `..` 路径段或末尾斜杠；省略时脚本直接报错，不猜测源目录。若显式使用 `AGENT_UID/AGENT_GID`，用 `sudo env AGENT_UID=... AGENT_GID=... bash scripts/migrate-home.sh ...` 传入相同值。脚本仅支持在实际 Docker 宿主机、通过本机 Unix socket 迁移未挂载的旧容器层 HOME；源 HOME 的挂载、源目录及其父目录链接、privileged/SYS_ADMIN 容器和 Docker 内部数据路径会被拒绝，避免源/目标重叠及递归自复制。
+第三个参数 `SOURCE_HOME` 必须明确提供：它是旧容器内非根目录的规范绝对路径，不能包含控制字符、重复分隔符、`.` / `..` 路径段或末尾斜杠；省略时脚本直接报错，不猜测源目录。导出副本固定准备为 root `0:0`，不再接受 `AGENT_UID/AGENT_GID`。脚本仅支持在实际 Docker 宿主机、通过本机 Unix socket 迁移未挂载的旧容器层 HOME；源 HOME 的挂载、源目录及其父目录链接、privileged/SYS_ADMIN 容器和 Docker 内部数据路径会被拒绝，避免源/目标重叠及递归自复制。
 
 路径检查器使用 Docker 的 `HEAD /containers/{id}/archive` 接口，按 [PathStat 字段约定](https://raw.githubusercontent.com/moby/moby/v28.3.1/api/types/container/container.go)逐级确认实际目录；它只读取元数据，不启动源容器，不复制父目录内容，读取失败时停止迁移。
 
-迁移先导出到源挂载范围之外的私有临时目录，再放入目标文件系统暂存；需要较大临时空间时可显式指定 `TMPDIR`，但它不能位于源容器挂载范围内。使用旧镜像作为无网络、只读根文件系统的权限修复工具时，APP 只读，仅导出副本可写，并仅授予 `CHOWN`、`DAC_READ_SEARCH`。最终由宿主 root 原子发布 `0700` 的目标目录。正常服务启动仍只需要原来的 `CHOWN/SETUID/SETGID`，没有增加 `DAC_OVERRIDE`。
+迁移先导出到源挂载范围之外的私有临时目录，再放入目标文件系统暂存；需要较大临时空间时可显式指定 `TMPDIR`，但它不能位于源容器挂载范围内。使用旧镜像作为无网络、只读根文件系统的权限修复工具时，只挂载导出副本，不挂载工程目录，并仅授予 `CHOWN`、`DAC_READ_SEARCH`。最终由宿主 root 原子发布 `0:0`、`0700` 的目标目录；源容器和工程文件不改属主。这是操作者显式执行的一次性导出，不是常规启动时递归归权。
 
 **目标 `.home` 已存在时，脚本会拒绝覆盖。** 不要直接删除它：先备份并决定如何合并。迁移失败时源容器不受影响，暂存目录会保留并打印位置；可先重新启动旧容器。若旧容器早已删除，只能重新登录一次，之后的磁盘状态才会由新布局保留。之后的常规镜像升级无需再次迁移。
 
-日常登录工具请使用 agent，而不是 root：
+日常登录工具与 DSH 一样使用 root，不需要 sudo：
 
 ```bash
-docker exec -it --user agent dsh-agent bash
+docker exec -it dsh-agent bash
 # 例如在该终端里运行 gh auth login / SSH 配置命令
 ```
 
@@ -578,7 +553,7 @@ docker exec -it --user agent dsh-agent bash
 |---|---|---|
 | `/srv/agent` | `/app` | 工作区代码 |
 | `/srv/agent/.dsh` | `/app/.dsh` | DSH profile、插件、凭证、日志 |
-| `/srv/agent/.home` | `/app/.home` | agent 的用户配置、磁盘凭据和用户级安装 |
+| `/srv/agent/.home` | `/app/.home` | root 的用户配置、磁盘凭据和用户级安装 |
 | `/srv/agent/.cache` | `/app/.cache` | 各语言缓存和 pnpm store |
 
 `docker compose down` 删除容器，不删除这些宿主数据；加 `-v` **也不会删除 bind mount**。要验证全新状态，请换一个空的 `AGENT_HOME`，不要把清理命名卷误当作重置。
@@ -595,7 +570,7 @@ AGENT_HOME="$(mktemp -d)" DSH_PLUGINS='' docker compose run --rm --no-deps agent
 
 - **没有挂 `/var/run/docker.sock`**。挂上等于容器内 root == 宿主机 root == 所有服务暴露。需要"容器里再跑容器"时，用 Sysbox 或 socket-proxy 单独解决。
 - **资源限死**：`cpus` / `mem_limit` / `pids_limit`。`pids_limit` 是防 fork bomb 的，agent 跑失控构建会 fork 爆宿主机。
-- **`cap_drop: ALL` + `no-new-privileges`**。副作用是 `ping` / `traceroute` 不可用（需要 `NET_RAW`）。
+- **root-only + 有限 capabilities**：`cap_drop: ALL` 后仅添加 `SYS_PTRACE/CHOWN/DAC_OVERRIDE/FOWNER`，保留 `no-new-privileges`，不加 privileged。`NET_RAW` 等能力仍不提供；root 身份不等于绕过所有容器边界。
 - **日志上限 10MB × 3**，防止长输出写满磁盘。
 - host 模式下**必须**配防火墙，见上文。
 
@@ -631,7 +606,7 @@ musl libc 和 manylinux wheel、native node 模块、JVM 全部不兼容，等�
 npm 上 `latest` = `0.1.7-rc.2`，比 `next` = `0.2.0-rc.2` 还旧，`npm i -g @deepseek-ai/dsh` 会装到旧版本。
 
 **镜像工具链与用户 CLI 分开。**
-`/usr/local` 的属主只在构建时调整，不随运行时 UID 递归改写；新用户 CLI 通过持久化 HOME 下的原生安装目录解决权限和重建丢失问题。显式指定 `/usr/local` 的系统级安装仍不保证任意 UID 可写或重建后保留。DSH 插件继续安装在 `/app/.dsh`，项目依赖优先使用工作区或虚拟环境。
+`/usr/local` 保留构建期属主，运行时 root 可修改它，但容器重建后丢弃；新用户 CLI 通过持久化 HOME 下的原生安装目录避免重建丢失。显式指定 `/usr/local` 的系统级安装不保证重建后保留。DSH 插件继续安装在 `/app/.dsh`，项目依赖优先使用工作区或虚拟环境。
 
 **rust / go 需要 `build-essential`。**
 不只是为了编译 C 扩展：`rustc` 需要一个 cc 才能链接产物，node / rustc / libjvm.so 还都动态链接 `libstdc++6` 和 `libgcc_s`，这两个由 `build-essential` 带进来。
@@ -646,18 +621,18 @@ npm 上 `latest` = `0.1.7-rc.2`，比 `next` = `0.2.0-rc.2` 还旧，`npm i -g @
 
 ## 开发与回归验证
 
-不需要给仓库安装 npm 测试依赖。先在**非 root** 的 Bash 环境（Windows 可用 Git Bash）运行：
+不需要安装 npm 测试依赖。静态检查和独立模块测试可用普通用户运行；入口的成功路径必须使用真实 root，普通用户运行 Node 测试时这些用例会明确跳过，不能算通过：
 
 ```bash
-bash tests/entrypoint.test.sh
 node --test tests/*.test.mjs
+npm run verify-notes
 for script in entrypoint.sh cli-env.sh scripts/*.sh tests/*.sh; do bash -n "$script"; done
 shellcheck entrypoint.sh cli-env.sh scripts/*.sh tests/*.sh
 sh -n cli-env.sh
 node --check home-init.mjs
 ```
 
-[CLI 回归测试](tests/entrypoint.test.sh) 实际执行入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置与可移植入口用例仍可在 Git Bash 运行。[HOME 路径回归](tests/home-path.test.mjs) 在 Linux 上使用真实 Unix socket HTTP 测试服务验证元数据协议与父目录链接拒绝，需要 `curl` 和 `jq`，不需要 Docker。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
+Linux 测试机上补跑 `sudo env PATH="$PATH" bash tests/entrypoint.test.sh` 和 `sudo env PATH="$PATH" node --test tests/*.test.mjs`；只操作隔离 fixture，不应对真实工作区运行入口。[CLI 回归测试](tests/entrypoint.test.sh) 实际执行 root 入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置测试可在 Git Bash 运行，root-only 入口验收需要 Linux。[HOME 路径回归](tests/home-path.test.mjs) 在 Linux 上使用真实 Unix socket HTTP 测试服务验证元数据协议与父目录链接拒绝，需要 `curl` 和 `jq`，不需要 Docker。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
 
 Linux + Docker 下的快速权限验收：
 
@@ -666,7 +641,7 @@ docker build -f tests/Dockerfile -t dsh-entrypoint-test .
 bash tests/container-runtime.sh dsh-entrypoint-test
 ```
 
-[容器回归脚本](tests/container-runtime.sh) 使用真实 `chown`、`setpriv`、文件权限与最小 capabilities，覆盖 root-owned `0755`、非 root-owned `0700`、UID/GID 映射、旧状态、重启、只读挂载和符号链接等场景；不会用 mock 冒充 Linux 权限模型。
+[容器回归脚本](tests/container-runtime.sh) 使用真实文件权限和 capabilities，覆盖 root 启动、旧 UID 的 `0700` 工作区与私有 HOME、深层混合属主文件读写且不改归属、重启、非 root/旧身份配置拒绝、缺少 capabilities、只读挂载和符号链接等场景；不会用 mock 冒充 Linux 权限模型。
 
 完整镜像验收（需要网络安装默认插件）：
 
@@ -676,7 +651,7 @@ bash tests/container-runtime.sh dsh-dev-image:verify
 bash tests/image-smoke.sh dsh-dev-image:verify
 ```
 
-[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 TypeScript/TSX 与 Rust 编译运行、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程；同时在**非 root** 的两种 Shell 里从 `/tmp` 执行 `adb version`，再用裸 `docker exec --user agent --workdir /tmp` 复核一次，全程不启动 ADB server（构建期也在两条 PATH 路径上各跑一次 `adb version`）。[TypeScript 验收](tests/typescript-smoke.sh) 在非 root 的两种 Shell 中验证 ESM 跨模块导入、`enum` 转译、无框架 TSX 和类型错误拒绝，不下载项目依赖。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 用默认与自定义 UID 运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec --user agent`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
+[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 TypeScript/TSX 与 Rust 编译运行、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程；同时在 **root** 的两种 Shell 里从 `/tmp` 执行 `adb version`，再用裸 `docker exec --workdir /tmp` 复核一次，全程不启动 ADB server（构建期也在两条 PATH 路径上各跑一次 `adb version`）。[TypeScript 验收](tests/typescript-smoke.sh) 在 root 的两种 Shell 中验证 ESM 跨模块导入、`enum` 转译、无框架 TSX 和类型错误拒绝，不下载项目依赖。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 以 root 在新目录与旧 UID 目录中运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
 
 DSH 对匿名 `/` 请求返回 `401` 是正常鉴权行为，不能用匿名 `curl --fail` 判断服务是否启动。验收从该测试容器的启动日志取 token，跟随登录重定向并保留 cookie，最终必须获得 `200`；不会为了测试通过而关闭鉴权。[Web 登录回归](tests/web-ready.test.mjs) 使用真实 HTTP 服务覆盖此流程及失败分支。
 

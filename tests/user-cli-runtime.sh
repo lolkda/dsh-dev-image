@@ -19,18 +19,19 @@ trap cleanup EXIT
 docker run --rm --network none --user 0 --entrypoint /bin/bash \
     --mount "type=bind,source=$scratch,target=/cases" "$image" -euc '
         chmod 755 /cases
-        mkdir /cases/default /cases/mapped
-        chmod 755 /cases/default /cases/mapped
+        mkdir /cases/default /cases/legacy
+        mkdir -p /cases/legacy/.home/.local
+        chown -R 1000:1000 /cases/legacy
+        chmod 755 /cases/default
+        chmod 700 /cases/legacy /cases/legacy/.home
     '
-caps=(--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID
+caps=(--cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER
       --security-opt no-new-privileges:true)
-for identity in default mapped; do
-    identity_env=()
-    if [[ "$identity" == mapped ]]; then identity_env=(-e AGENT_UID=12345 -e AGENT_GID=12346); fi
-    args=(--network none "${caps[@]}" "${identity_env[@]}" -e DSH_PLUGINS=
+for identity in default legacy; do
+    args=(--network none "${caps[@]}" -e DSH_PLUGINS=
           --mount "type=bind,source=$scratch/$identity,target=/app"
           --mount "type=bind,source=$root/tests,target=/acceptance,readonly")
-    printf '\n=== user CLI installation with %s identity ===\n' "$identity"
+    printf '\n=== root CLI installation with %s data ===\n' "$identity"
     docker run --rm "${args[@]}" "$image" bash -euc '
         printf "%s" "$(< /etc/hostname)" > "$HOME/cli-source-container"
         bash /acceptance/user-cli-smoke.sh install
@@ -47,7 +48,7 @@ for identity in default mapped; do
 
     live_id="$(docker run -d "${args[@]}" "$image" bash -euc ': > /tmp/dsh-cli-exec-ready; exec sleep infinity')"
     # docker exec 不经过入口；靠镜像 ENV 找到持久化的 CLI，而不是当前进程 export。
-    # 标记只由降权后的主命令创建，避免自定义 UID 的账户调整与 exec 发生竞态。
+    # 标记只由主命令创建，避免初始化尚未完成时就执行验收。
     docker exec "$live_id" /bin/bash -euc '
         for ((attempt = 0; attempt < 100; attempt++)); do
             if [[ -f /tmp/dsh-cli-exec-ready ]]; then
@@ -57,11 +58,11 @@ for identity in default mapped; do
         done
         exit 1
     '
-    [[ "$(docker exec --user agent "$live_id" npm prefix --global)" == /app/.home/.local ]]
+    [[ "$(docker exec "$live_id" npm prefix --global)" == /app/.home/.local ]]
     for manager in npm pnpm yarn pip uv cargo go; do
-        [[ "$(docker exec --user agent "$live_id" "dsh-cli-$manager-fixture")" == "persistent $manager CLI" ]]
+        [[ "$(docker exec "$live_id" "dsh-cli-$manager-fixture")" == "persistent $manager CLI" ]]
     done
     docker rm -f "$live_id" >/dev/null
     live_id=''
 done
-printf '\n=== USER CLI RECREATION AND UID CONTRACTS PASSED ===\n'
+printf '\n=== ROOT CLI RECREATION AND LEGACY DATA CONTRACTS PASSED ===\n'

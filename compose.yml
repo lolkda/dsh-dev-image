@@ -12,9 +12,10 @@ services:
       dockerfile: Dockerfile
       # 工具链版本只在 Dockerfile ARG 中定义，定制用 --build-arg。
     image: ghcr.io/lolkda/dsh-dev-image:latest
+    user: "0:0"
     init: true
     command: ["dsh", "web"]
-    # 日常 shell：docker compose exec --user agent agent bash
+    # 日常 shell：docker compose exec agent bash
     stdin_open: true
     tty: true
     restart: unless-stopped
@@ -23,7 +24,7 @@ services:
     network_mode: host
 
     volumes:
-      # 入口处理新建 root-owned 目录；已有非 root 属主会被自动跟随。
+      # 保留已有目录属主，由 root 直接访问。
       - ${AGENT_HOME:-/srv/agent}:/app
 
     environment:
@@ -34,8 +35,6 @@ services:
       YARN_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
       PIP_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
       UV_DEFAULT_INDEX: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
-      AGENT_UID: ${AGENT_UID:-}
-      AGENT_GID: ${AGENT_GID:-}
       DSH_PROFILE: ${DSH_PROFILE:-web}
       # 用 - 而不是 :-：显式空值必须真的禁用安装。
       # 插件都不带版本号：每次启动装 registry 最新发布。
@@ -53,10 +52,11 @@ services:
       - ALL
     cap_add:
       - SYS_PTRACE
-      # 仅入口初始化身份/属主需要；普通 mkdir、插件和主进程都在降权后运行。
+      # 允许在容器内手动调整单个文件归属；入口不自动归权。
       - CHOWN
-      - SETUID
-      - SETGID
+      # 访问旧 UID 的文件，并允许 HOME 权限收紧；不修改文件属主。
+      - DAC_OVERRIDE
+      - FOWNER
 
     logging:
       driver: json-file

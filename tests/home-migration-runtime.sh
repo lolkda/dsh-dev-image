@@ -16,11 +16,11 @@ cleanup() {
 }
 trap cleanup EXIT
 run_migration() {
-    # 测试明确使用不同于 runner 的目标 UID，防止忽略 0700 目录的跨父目录 rename 权限。
+    # 以宿主 root 发布私有导出副本，目标固定为 0:0。
     if (( EUID == 0 )); then
-        timeout 30 env TMPDIR="$scratch/export" AGENT_UID=1000 AGENT_GID=1000 bash "$root/scripts/migrate-home.sh" "$@" "$source_home"
+        timeout 30 env TMPDIR="$scratch/export" bash "$root/scripts/migrate-home.sh" "$@" "$source_home"
     else
-        timeout 30 sudo env TMPDIR="$scratch/export" AGENT_UID=1000 AGENT_GID=1000 bash "$root/scripts/migrate-home.sh" "$@" "$source_home"
+        timeout 30 sudo env TMPDIR="$scratch/export" bash "$root/scripts/migrate-home.sh" "$@" "$source_home"
     fi
 }
 mkdir "$scratch/app" "$scratch/bound-source" "$scratch/linked-source" "$scratch/export"
@@ -32,7 +32,7 @@ legacy="$(docker create --network none --user 0 --entrypoint /bin/bash \
     printf legacy-key-fixture > "$SOURCE_HOME/.ssh/fixture-key"
     printf "# user shell fixture\n" > "$SOURCE_HOME/.bashrc"
     git config --file "$SOURCE_HOME/.gitconfig" user.name "Migrated Fixture"
-    chown -R "$(id -u agent):$(id -g agent)" "$SOURCE_HOME"
+    chown -R 1000:1000 "$SOURCE_HOME"
     chmod 700 "$SOURCE_HOME" "$SOURCE_HOME/.ssh"
     chmod 600 "$SOURCE_HOME/.config/gh/hosts.yml" "$SOURCE_HOME/.ssh/fixture-key"
     chown 0:0 "$SOURCE_HOME/.ssh/fixture-key"
@@ -44,9 +44,11 @@ test "$(docker inspect --format '{{.State.ExitCode}}' "$legacy")" = 0
 run_migration "$legacy" "$scratch/app"
 test "$(docker inspect --format '{{.State.Running}}' "$legacy")" = false
 
-docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
-    --security-opt no-new-privileges:true -e DSH_PLUGINS= -e AGENT_UID=1000 -e AGENT_GID=1000 \
+docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+    --security-opt no-new-privileges:true -e DSH_PLUGINS= \
     --mount "type=bind,source=$scratch/app,target=/app" "$image" bash -euc '
+        test "$(id -u):$(id -g)" = 0:0
+        test "$(stat -c %u:%g /app/.home)" = 0:0
         test "$HOME" = /app/.home
         test "$(< "$HOME/.config/gh/hosts.yml")" = legacy-gh-fixture
         test "$(< "$HOME/.ssh/fixture-key")" = legacy-key-fixture

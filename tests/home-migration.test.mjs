@@ -79,6 +79,18 @@ for (const sourceHome of ['', '/', 'relative/home', '//srv/home', '/srv//home', 
   });
 }
 
+for (const identity of [{ AGENT_UID: '1000' }, { AGENT_GID: '1000' }]) {
+  test(`HOME migration rejects removed identity configuration: ${JSON.stringify(identity)}`, async (t) => {
+    const app = mkdtempSync(join(tmpdir(), 'dsh-home-migration-'));
+    t.after(() => rmSync(app, { recursive: true, force: true }));
+    await assert.rejects(migrate(app, identity), (error) => {
+      assert.match(error.stderr, /AGENT_UID\/AGENT_GID 已移除/);
+      return true;
+    });
+    assert.deepEqual(readdirSync(app), []);
+  });
+}
+
 test('HOME migration accepts spaces and quotes in the explicit source path', async (t) => {
   const app = mkdtempSync(join(tmpdir(), 'dsh-home-migration-'));
   t.after(() => rmSync(app, { recursive: true, force: true }));

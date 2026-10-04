@@ -1,16 +1,20 @@
 #!/bin/bash
-# 启动顺序：校验配置 → root 仅修复身份/必要属主 → agent 建目录、装插件、exec。
-# root 阶段只需 CHOWN / SETUID / SETGID；普通文件操作不依赖 DAC_OVERRIDE。
-# 只管理 /app 本身和状态目录，不递归改写用户的整个项目。
+# root-only：校验配置 → root 建目录、装插件 → exec 主命令；不切换身份或改写属主。
+# /app/.home 保持持久化；旧 UID 的文件通过运行时 capabilities 访问，不递归 chown。
 set -euo pipefail
 
 log() { printf 'dsh-entrypoint: %s\n' "$*" >&2; }
 fatal() { log "FATAL $*"; exit 1; }
 
-# 非 root 路径也执行同一套准备，可配合预先授权的 docker run --user 使用。
+if (( EUID != 0 )) || [[ "$(/usr/bin/id -g)" != 0 ]]; then
+    fatal '此镜像仅支持 root (0:0)；请移除非 root 的 user/--user 配置。'
+fi
+[[ -z "${AGENT_UID:-}" && -z "${AGENT_GID:-}" ]] \
+    || fatal 'AGENT_UID/AGENT_GID 已移除；root-only 镜像不再映射身份，请删除旧配置。'
+export USER=root LOGNAME=root
 APP_DIR="${APP_DIR:-/app}"
 profile="${DSH_PROFILE:-web}"
-# HOME 是受管持久化状态，统一到挂载点内的真实路径。
+# HOME 是受管持久化状态，统一到挂载点内的真实路径，不改为 /root。
 export HOME="$APP_DIR/.home"
 export DSH_HOME="${DSH_HOME:-$APP_DIR/.dsh}"
 export CARGO_HOME="${CARGO_HOME:-$APP_DIR/.cache/cargo}"
@@ -26,15 +30,6 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-$APP_DIR/.cache/uv}"
 (( $# > 0 )) || fatal '缺少启动命令，例如：dsh web 或 bash。'
 [[ "$APP_DIR" = /* && "$APP_DIR" != / ]] || fatal 'APP_DIR 必须是非根目录的绝对路径。'
 [[ "${DSH_PLUGINS_REQUIRED:-1}" =~ ^[01]$ ]] || fatal 'DSH_PLUGINS_REQUIRED 只能是 0 或 1。'
-
-validate_id() {
-    # 拒绝 root、符号、前导零和超出 Linux uid_t 范围的值；不用不安全的算术求值。
-    local name="$1" value="$2"
-    [[ "$value" =~ ^[1-9][0-9]{0,9}$ ]] || fatal "$name 必须是非零的十进制 UID/GID。"
-    (( 10#$value < 4294967295 )) || fatal "$name 超出 UID/GID 范围。"
-}
-[[ -z "${AGENT_UID:-}" ]] || validate_id AGENT_UID "$AGENT_UID"
-[[ -z "${AGENT_GID:-}" ]] || validate_id AGENT_GID "$AGENT_GID"
 
 state_dirs=(
     "$HOME" "$APP_DIR/.cache" "$DSH_HOME" "$CARGO_HOME" "$GOPATH" "$GOMODCACHE"
@@ -53,139 +48,30 @@ for spec in "${plugins[@]}"; do
     [[ "$spec" != -* ]] || fatal "插件 spec 不能是包管理器选项：$spec"
 done
 
-as_agent() {
-    /usr/bin/setpriv --reuid=agent --regid=agent --init-groups -- "$@"
-}
-
-writable_as_agent() {
-    # 路径通过参数传入，不能插入 sh -c 的代码字符串（路径可能含单引号）。
-    # shellcheck disable=SC2016 # $1 由降权后的 sh 展开，不由当前 root shell 展开。
-    as_agent /bin/sh -c 'test -d "$1" && test -w "$1" && test -x "$1"' sh "$1"
-}
-
 permission_error() {
-    fatal "目录不可写：$1（目标 UID:GID=${want_uid:-$EUID}:${want_gid:-$(id -g)}）。检查挂载是否只读、宿主 ACL/NFS root-squash，以及 CHOWN/SETUID/SETGID；不要用 DSH_PLUGINS_REQUIRED=0 掩盖权限错误。"
+    fatal "目录不可写：$1（运行身份 root 0:0）。检查只读挂载、宿主 ACL/NFS root-squash、用户命名空间及 DAC_OVERRIDE/FOWNER；不要用 DSH_PLUGINS_REQUIRED=0 掩盖权限错误。"
 }
 
-if (( EUID == 0 )); then
-    # 不信任 DSH_ENTRYPOINT_DROPPED 等外部标记；是否降权只看实际 EUID。
-    # 特别是 /app/.cache/*/bin 可由工作区写入，绝不能让 root 从那里找命令。
-    runtime_path="$PATH"
-    export PATH=/usr/sbin:/usr/bin:/sbin:/bin
-    cur_uid="$(id -u agent)" || fatal '镜像缺少 agent 用户。'
-    cur_gid="$(id -g agent)" || fatal '镜像缺少 agent 组。'
-    want_uid="${AGENT_UID:-}"
-    want_gid="${AGENT_GID:-}"
-    [[ ! -L "$APP_DIR" ]] || fatal "挂载目录不能是符号链接：$APP_DIR"
-
-    if [[ -d "$APP_DIR" ]]; then
-        app_uid="$(stat -c '%u' -- "$APP_DIR")"
-        app_gid="$(stat -c '%g' -- "$APP_DIR")"
-        if [[ "$app_uid" != 0 ]]; then
-            want_uid="${want_uid:-$app_uid}"
-            # 不自动跟随 root 组，未指定时保留镜像的 agent GID。
-            if [[ "$app_gid" != 0 ]]; then
-                want_gid="${want_gid:-$app_gid}"
-            fi
-        fi
-    else
-        mkdir -p -- "$APP_DIR" || permission_error "$APP_DIR"
-    fi
-    # 尊重构建时 USER_UID/USER_GID，不再把非 1000 的镜像重置为 1000。
-    want_uid="${want_uid:-$cur_uid}"
-    want_gid="${want_gid:-$cur_gid}"
-    validate_id AGENT_UID "$want_uid"
-    validate_id AGENT_GID "$want_gid"
-
-    # 在改账户或 APP owner 前检查私有 HOME。换 UID 是显式离线迁移，不在这里
-    # 尝试用缺少读取权限的 root 递归修改旧 HOME，避免失败前只改了一半。
-    app_uid="$(stat -c %u -- "$APP_DIR")"
-    app_gid="$(stat -c %g -- "$APP_DIR")"
-    mount_owner=(/usr/bin/setpriv --reuid="$app_uid" --regid="$app_gid" --clear-groups --)
-    "${mount_owner[@]}" test -x "$APP_DIR" || permission_error "$APP_DIR"
-    if "${mount_owner[@]}" test -L "$HOME"; then
-        fatal "受管 HOME 不能是符号链接：$HOME"
-    fi
-    if "${mount_owner[@]}" test -e "$HOME"; then
-        "${mount_owner[@]}" test -d "$HOME" || fatal "HOME 路径不是目录：$HOME"
-        home_identity="$("${mount_owner[@]}" stat -c '%u:%g' -- "$HOME")"
-        [[ "$home_identity" == "$want_uid:$want_gid" ]] || fatal "HOME 属于 $home_identity，目标为 $want_uid:$want_gid；请先显式离线迁移 HOME 属主。本次未修改账户或挂载目录。"
-    fi
-
-    if [[ "$cur_gid" != "$want_gid" ]]; then
-        log "agent GID $cur_gid -> $want_gid"
-        groupmod -o -g "$want_gid" agent || fatal '无法调整 agent GID。'
-    fi
-    if [[ "$cur_uid" != "$want_uid" ]]; then
-        log "agent UID $cur_uid -> $want_uid"
-        # usermod -u 会隐式遍历 HOME。先指向 root 控制目录内的非存在路径，
-        # 避免它在最小 capabilities 下扫描已有 0700 私有 HOME / SSH 目录。
-        uid_staging="$(mktemp -d)"
-        if ! usermod -o -u "$want_uid" -d "$uid_staging/absent-home" agent; then
-            usermod -d "$HOME" agent || log 'WARNING agent HOME 恢复失败；本次不启动主进程。'
-            fatal '无法调整 agent UID。'
-        fi
-        usermod -d "$HOME" agent || fatal '无法恢复 agent HOME。'
-        rmdir -- "$uid_staging"
-    fi
-    account_home="$(getent passwd agent | cut -d: -f6)"
-    if [[ "$account_home" != "$HOME" ]]; then
-        # 仅 -d，不搬移或递归修改已有用户数据；也修复中断的 UID 调整。
-        usermod -d "$HOME" agent || fatal '无法设置 agent HOME。'
-    fi
-
-    # 只修复挂载点本身，不动工程内的代码、.git 或其他不属于镜像管理的文件。
-    if ! writable_as_agent "$APP_DIR"; then
-        log "修复挂载点属主：$APP_DIR -> $want_uid:$want_gid"
-        chown -h "$want_uid:$want_gid" "$APP_DIR" || permission_error "$APP_DIR"
-        writable_as_agent "$APP_DIR" || permission_error "$APP_DIR"
-    fi
-
-    # 兼容旧容器留下的 root-owned 状态。健康目录不做递归扫描；缺的交给 agent 建。
-    # 通过 agent 检查，才能支持 0700 的非 root 挂载目录和最小 capabilities。
-    for dir in "${state_dirs[@]}"; do
-        if as_agent test -L "$dir"; then
-            fatal "受管状态目录不能是符号链接：$dir"
-        fi
-        if as_agent test -e "$dir"; then
-            as_agent test -d "$dir" || fatal "状态路径不是目录：$dir"
-            if [[ "$dir" == "$HOME" ]]; then
-                [[ "$(as_agent stat -c '%u:%g' -- "$dir")" == "$want_uid:$want_gid" ]] || fatal 'HOME 属主已变化，请先停止其他写入并显式迁移。'
-                writable_as_agent "$dir" || permission_error "$dir"
-            elif ! writable_as_agent "$dir"; then
-                log "修复状态目录属主：$dir -> $want_uid:$want_gid"
-                chown -hR "$want_uid:$want_gid" "$dir" || permission_error "$dir"
-                writable_as_agent "$dir" || permission_error "$dir"
-            fi
-        fi
-    done
-
-    # setpriv 不会像 login 一样重置用户环境；HOME 已统一到持久化真实路径。
-    export USER=agent LOGNAME=agent PATH="$runtime_path"
-    log "以 agent ($want_uid:$want_gid) 启动，HOME=$HOME"
-    exec /usr/bin/setpriv --reuid=agent --regid=agent --init-groups --no-new-privs \
-        -- /bin/bash "$0" "$@"
-fi
-
-# 从这里起绝不需要 root，也不尝试 chown。失败必须发生在插件安装之前。
+# 初始化只补目录，不更改属主；绝对工具路径避免初始化被工作区同名工具覆盖。
+[[ ! -L "$APP_DIR" ]] || fatal "挂载目录不能是符号链接：$APP_DIR"
+/usr/bin/mkdir -p -- "$APP_DIR" || permission_error "$APP_DIR"
 [[ -d "$APP_DIR" && -w "$APP_DIR" && -x "$APP_DIR" ]] || permission_error "$APP_DIR"
 for dir in "${state_dirs[@]}"; do
     [[ ! -L "$dir" ]] || fatal "受管状态目录不能是符号链接：$dir"
     if [[ "$dir" == "$HOME" ]]; then
-        (umask 077; mkdir -p -- "$dir") || permission_error "$dir"
+        (umask 077; /usr/bin/mkdir -p -- "$dir") || permission_error "$dir"
     else
-        mkdir -p -- "$dir" || permission_error "$dir"
+        /usr/bin/mkdir -p -- "$dir" || permission_error "$dir"
     fi
     [[ -d "$dir" && -w "$dir" && -x "$dir" ]] || permission_error "$dir"
 done
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+script_dir="$(cd -- "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 node_command=/usr/local/bin/node
 [[ -x "$node_command" ]] || node_command=node
-"$node_command" "$script_dir/home-init.mjs" "$HOME" /etc/skel || fatal '持久化 HOME 初始化失败。'
+"$node_command" "$script_dir/home-init.mjs" "$HOME" /etc/skel || fatal '持久化 HOME 初始化失败；检查目录类型与 FOWNER 权限。'
 # shellcheck source=cli-env.sh
 source "$script_dir/cli-env.sh" || fatal '用户级 CLI 环境配置无效。'
 
-# 私有 HOME 下的工具目录只由 agent 创建/验证，root 不递归修复或扫描它们。
 # 缓存与安装产物分开：清理 .cache 不应删除新安装的用户 CLI。
 cli_dirs=(
     "$HOME/.local" "$HOME/.local/bin" "$HOME/.local/share"
@@ -202,10 +88,9 @@ for dir in "${cli_dirs[@]}"; do
     [[ -d "$dir" && -w "$dir" && -x "$dir" ]] || permission_error "$dir"
 done
 cd -- "$APP_DIR" || permission_error "$APP_DIR"
+log "以 root (0:0) 启动，HOME=$HOME"
 
-# 插件默认不带版本号（装 registry 最新发布），但 pnpm 12 自带 24h 成熟期
-# （minimumReleaseAge=1440）：刚发布的版本会被回退到上一个成熟版本，等于"装最新"
-# 要等一天。只对插件安装关掉它；用户项目里的 pnpm 仍走自己的默认策略。
+# pnpm 12 默认 24h 成熟期只在插件安装时关闭，用户项目仍用自己的默认策略。
 for spec in "${plugins[@]}"; do
     log "dsh plugin --profile $profile add $spec"
     if ! PNPM_CONFIG_MINIMUM_RELEASE_AGE=0 dsh plugin --profile "$profile" add "$spec"; then

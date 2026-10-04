@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 验证本次完整镜像：非 root 工具链 + 实际缓存位置 + 默认插件启动后的登录流程。
+# 验证本次完整镜像：root 工具链 + 实际缓存位置 + 默认插件启动后的登录流程。
 set -euo pipefail
 
 # 使用真实 HTTP，既不把匿名 401 当未启动，也不把任意匿名 200 当作 DSH 就绪。
@@ -36,16 +36,16 @@ main() {
     cookie_jar="$(mktemp)"
     trap cleanup EXIT
 
-    local caps=(--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID
+    local caps=(--cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER
                 --security-opt no-new-privileges:true)
     for mode in -ec -lec; do
         docker run --rm "${caps[@]}" \
             --mount "type=bind,src=$root/tests/typescript-smoke.sh,dst=/tmp/typescript-smoke.sh,readonly" \
             -e DSH_PLUGINS= "$image" bash "$mode" '
             set -euo pipefail
-            test "$(id -u)" != 0
+            test "$(id -u):$(id -g)" = 0:0
             test "$HOME" = /app/.home
-            test "$(getent passwd agent | cut -d: -f6)" = "$HOME"
+            test "$(getent passwd root | cut -d: -f6)" = "$HOME"
             test -d "$HOME" && test ! -L "$HOME"
             for tool in adb python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
                         git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
@@ -128,7 +128,7 @@ main() {
         test "$repository" = /app/.cache/m2/repository
     '
 
-    # 在独立 bind mount 中用默认与自定义 UID 安装 CLI，跨容器验证并清理缓存。
+    # 在独立 bind mount 中用root-owned 与旧 UID 数据目录安装 CLI，跨容器验证并清理缓存。
     bash "$root/tests/user-cli-runtime.sh" "$image"
 
     # 临时启动默认 Web/插件；只发布 runner 的 loopback 端口，不在 CI 打开浏览器。
@@ -154,7 +154,7 @@ main() {
         printf 'Default Web authenticated startup check failed\n' >&2
         exit 1
     fi
-    docker exec --user agent "$web_id" node -e '
+    docker exec "$web_id" node -e '
         const assert = require("node:assert/strict");
         const fs = require("node:fs");
         const { execFileSync } = require("node:child_process");
@@ -171,12 +171,13 @@ main() {
             assert.equal(installed.version, expected, name + ": installed " + installed.version + ", expected latest " + expected);
             console.log("Verified plugin: " + name + "@" + installed.version);
         }
-        assert.notEqual(process.getuid(), 0);
+        assert.equal(process.getuid(), 0);
+        assert.equal(process.getgid(), 0);
     '
     # 裸 docker exec：exec 不经过入口（entrypoint 不会 cd "$APP_DIR"），也不经登录 shell
-    # 或任何 alias；非 root 用户 --workdir /tmp 下无 shell 包装直接调用 adb。
+    # 或任何 alias；root 用户 --workdir /tmp 下无 shell 包装直接调用 adb。
     # 用消费全部输出的 grep（不用 -q）：避免 pipefail 下匹配即退出导致上游 SIGPIPE。
-    docker exec --user agent --workdir /tmp "$web_id" adb version \
+    docker exec --workdir /tmp "$web_id" adb version \
         | grep -i "^Android Debug Bridge version " >/dev/null
     printf 'Verified adb CLI over bare docker exec from /tmp\n'
     printf '\n=== FULL IMAGE AND AUTHENTICATED WEB STARTUP PASSED ===\n'

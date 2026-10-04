@@ -55,9 +55,14 @@ for (const path of ['compose.yml', 'compose.bridge.yml']) {
     assert.doesNotMatch(source, /^\s+(GO_VERSION|JDK_VERSION|DSH_VERSION|PNPM_VERSION|TYPESCRIPT_VERSION|TSX_VERSION|USER_UID|USER_GID):/m);
   });
 
-  test(`${path}: identity overrides reach the container`, () => {
-    assert.match(source, /^\s+AGENT_UID:\s*\$\{AGENT_UID:-\}/m);
-    assert.match(source, /^\s+AGENT_GID:\s*\$\{AGENT_GID:-\}/m);
+  test(`${path}: root-only identity with bounded legacy-data capabilities`, () => {
+    assert.match(source, /^\s+user: "0:0"$/m);
+    assert.doesNotMatch(source, /^\s+AGENT_(UID|GID):/m);
+    const caps = source.match(/cap_add:\n((?:\s+(?:#.*|- [A-Z_]+)\n)+)/)?.[1] ?? '';
+    assert.deepEqual([...caps.matchAll(/- ([A-Z_]+)/g)].map(match => match[1]).sort(), ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SYS_PTRACE']);
+    assert.match(source, /cap_drop:\n\s+- ALL/);
+    assert.match(source, /no-new-privileges:true/);
+    assert.doesNotMatch(source, /privileged:\s*true/);
   });
 }
 
@@ -127,8 +132,18 @@ test('image provides persistent HOME even for docker exec', () => {
   assert.match(dockerfile, /\bHOME=\/app\/\.home\b/);
 });
 
-test('agent account home is inside the persistent mount', () => {
-  assert.match(dockerfile, /useradd[^\n;]*-d \/app\/\.home/);
+for (const path of ['Dockerfile', 'tests/Dockerfile']) {
+  test(`${path}: root account and default exec share the persistent HOME`, () => {
+    const source = read(path);
+    assert.match(source, /usermod -d \/app\/\.home -s \/bin\/bash root/);
+    assert.match(source, /^USER 0:0$/m);
+    assert.doesNotMatch(source, /USER_UID|USER_GID|agent:agent|\b(?:useradd|groupadd)\b/);
+  });
+}
+
+test('runtime never rewrites owners or switches accounts', () => {
+  const commands = read('entrypoint.sh').split('\n').filter(line => !/^\s*#/.test(line)).join('\n');
+  assert.doesNotMatch(commands, /\b(?:chown|usermod|groupmod|setpriv|sudo)\b/);
 });
 
 for (const path of ['Dockerfile', 'tests/Dockerfile']) {

@@ -1,0 +1,7 @@
+{
+  "name": "dsh-dev-image-checks",
+  "private": true,
+  "scripts": {
+    "verify-notes": "node --test tests/notes.test.mjs"
+  }
+}

@@ -23,10 +23,11 @@ jobs:
           shellcheck entrypoint.sh cli-env.sh scripts/*.sh tests/*.sh
           sh -n cli-env.sh
           node --check home-init.mjs
-      - name: Portable CLI and configuration regression tests
+      - name: Root CLI and configuration regression tests
         run: |
-          bash tests/entrypoint.test.sh
-          node --test tests/*.test.mjs
+          sudo env PATH="$PATH" bash tests/entrypoint.test.sh
+          sudo env PATH="$PATH" node --test tests/*.test.mjs
+          npm run verify-notes
       - name: Validate both Compose adapters
         run: |
           docker compose -f compose.yml config --quiet

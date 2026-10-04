@@ -7,8 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { test as nodeTest } from 'node:test';
 
 // These integration checks use POSIX paths, executable bits and a native npm binary.
-// Windows retains the portable configuration/entrypoint suite; Linux CI runs every case below.
+// Root-only entrypoint checks run as root in Linux CI; shell environment checks need no privilege.
 const test = process.platform === 'win32' ? nodeTest.skip : nodeTest;
+const rootTest = process.getuid?.() === 0 ? test : (name, ...args) => nodeTest(name, { skip: 'requires real UID 0; run the root suite in Docker CI' }, args.at(-1));
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const shellEnvironment = join(root, 'cli-env.sh');
@@ -66,14 +67,14 @@ const reportEnvironment = `node -e '
   console.log(JSON.stringify(Object.fromEntries(keys.map(key => [key, process.env[key]]))));
 '`;
 
-test('entrypoint defaults user CLI installations to persistent HOME, not system or cache directories', (t) => {
+rootTest('entrypoint defaults user CLI installations to persistent HOME, not system or cache directories', (t) => {
   const options = fixture(t);
   const actual = JSON.parse(successful(entrypoint(options, reportEnvironment)));
   const expected = Object.fromEntries(Object.entries(defaults).map(([key, suffix]) => [key, join(options.home, suffix)]));
   assert.deepEqual(actual, expected);
 });
 
-test('npm actually resolves its global prefix inside persistent HOME', (t) => {
+rootTest('npm actually resolves its global prefix inside persistent HOME', (t) => {
   const options = fixture(t);
   assert.equal(successful(entrypoint(options, 'npm prefix --global')), join(options.home, '.local'));
 });
@@ -114,7 +115,7 @@ test('persisted CLI lookup survives a shell PATH reset', (t) => {
   assert.equal(successful(result), 'fixture-local-cli\nfixture-pnpm-cli');
 });
 
-test('explicit package-manager installation paths remain authoritative and executable', (t) => {
+rootTest('explicit package-manager installation paths remain authoritative and executable', (t) => {
   const options = fixture(t);
   const overrides = Object.fromEntries(Object.keys(defaults).map(key => [key, join(options.home, 'custom', key)]));
   overrides.PNPM_CONFIG_GLOBAL_BIN_DIR = join(options.home, 'custom', 'pnpm-bin');
@@ -130,18 +131,14 @@ test('explicit package-manager installation paths remain authoritative and execu
   assert.equal(successful(entrypoint(options, 'npm prefix --global', overrides)), overrides.npm_config_prefix);
 });
 
-for (const collision of ['file', 'symlink', 'readonly']) {
-  test(`a ${collision} at a managed CLI directory fails before plugins or the main command`, { skip: process.platform === 'win32' }, (t) => {
+// Permission bits alone are not a readonly filesystem for root; actual readonly mounts are tested in Docker.
+for (const collision of ['file', 'symlink']) {
+  rootTest(`a ${collision} at a managed CLI directory fails before plugins or the main command`, { skip: process.platform === 'win32' }, (t) => {
     const options = fixture(t);
     const local = join(options.home, '.local');
     mkdirSync(options.home, { recursive: true });
     if (collision === 'file') writeFileSync(local, 'do not overwrite');
     if (collision === 'symlink') symlinkSync(options.directory, local, 'dir');
-    if (collision === 'readonly') {
-      mkdirSync(local);
-      chmodSync(local, 0o500);
-      t.after(() => { if (existsSync(local)) chmodSync(local, 0o700); });
-    }
     const bin = join(options.directory, 'fake-bin');
     mkdirSync(bin);
     writeFileSync(join(bin, 'dsh'), '#!/bin/sh\nprintf plugin-called > "$CLI_PLUGIN_MARKER"\n');
@@ -158,7 +155,7 @@ for (const collision of ['file', 'symlink', 'readonly']) {
 }
 
 for (const prefix of ['relative-tools', '/tmp/ambiguous:tools']) {
-  test(`an invalid CLI prefix is rejected: ${prefix}`, (t) => {
+  rootTest(`an invalid CLI prefix is rejected: ${prefix}`, (t) => {
     const options = fixture(t);
     const result = entrypoint(options, 'touch "$APP_DIR/main-called"', { npm_config_prefix: prefix });
     assert.ifError(result.error);
@@ -167,7 +164,7 @@ for (const prefix of ['relative-tools', '/tmp/ambiguous:tools']) {
   });
 }
 
-test('npm-installed CLI survives a new entrypoint process without its source or download cache', (t) => {
+rootTest('npm-installed CLI survives a new entrypoint process without its source or download cache', (t) => {
   const options = fixture(t);
   // Before installing anything, prove the real npm target is isolated; never write into the host prefix.
   assert.equal(successful(entrypoint(options, 'npm prefix --global')), join(options.home, '.local'));
@@ -189,7 +186,7 @@ test('npm-installed CLI survives a new entrypoint process without its source or 
   assert.equal(successful(entrypoint(options, command)), 'persistent npm CLI');
 });
 
-test('entrypoint preserves user package-manager configuration files', (t) => {
+rootTest('entrypoint preserves user package-manager configuration files', (t) => {
   const options = fixture(t);
   mkdirSync(join(options.home, '.config', 'pnpm'), { recursive: true });
   const files = ['.npmrc', '.yarnrc', '.config/pnpm/config.yaml'];

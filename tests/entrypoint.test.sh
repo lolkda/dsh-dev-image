@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Portable CLI regression tests; Linux ownership/capabilities are covered separately.
+# Root CLI regression tests; real mounts/capabilities are covered separately.
 set -euo pipefail
+(( EUID == 0 )) || { printf "This suite requires root; use sudo bash tests/entrypoint.test.sh or Docker CI.\n" >&2; exit 1; }
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
@@ -109,11 +110,11 @@ maturity_cutoff_override_stays_out_of_the_command() {
     test "$(< "$APP_DIR/command-env")" = unset
 }
 
-invalid_uid_is_rejected() {
+removed_identity_override_is_rejected() {
     setup_case
     export AGENT_UID=0
     if bash "$ROOT/entrypoint.sh" true > "$CASE_DIR/output" 2>&1; then
-        printf 'Expected UID 0 to be rejected\n' >&2
+        printf 'Expected the removed AGENT_UID setting to be rejected\n' >&2
         return 1
     fi
 }
@@ -222,13 +223,13 @@ run_case 'reject a file at HOME before installing plugins' home_file_is_rejected
 run_case 'use the selected profile for the default web command' web_command_uses_selected_profile
 run_case 'allow DSH_PLUGINS to be unset' unset_plugins_is_supported
 run_case 'support newline-separated plugin specs' multiline_plugins_are_preserved
-run_case 'reject root as the requested agent UID' invalid_uid_is_rejected
+run_case 'reject removed agent identity configuration' removed_identity_override_is_rejected
 run_case 'validate boolean configuration instead of silently ignoring it' invalid_boolean_is_rejected
 run_case 'reject a file at the state directory before attempting plugins' file_instead_of_state_directory_is_rejected
 run_case 'reject package-manager options passed as plugin names' plugin_option_is_rejected
 run_case 'support spaces and quotes in the workspace path' quoted_workspace_path_is_supported
 run_case 'preserve the command exit status' command_exit_status_is_preserved
-run_case 'create state directories before the command as a non-root user' creates_state_before_command
+run_case 'create state directories before the command as root' creates_state_before_command
 run_case 'run commands from APP_DIR' uses_workspace_for_relative_commands
 run_case 'reject an empty command' empty_command_is_error
 run_case 'required plugin failure prevents command execution' plugin_failure_blocks_command

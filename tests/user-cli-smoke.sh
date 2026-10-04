@@ -4,7 +4,7 @@
 set -euo pipefail
 mode="${1:?usage: user-cli-smoke.sh install|check}"
 [[ "$mode" == install || "$mode" == check ]]
-[[ "$(id -u)" != 0 ]]
+[[ "$(id -u):$(id -g)" == 0:0 ]]
 [[ "$HOME" == "${APP_DIR:-/app}/.home" ]]
 
 # 安装前检查真实解析结果，绝不能把 fixture 写进测试机的系统 prefix。

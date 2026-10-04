@@ -4,12 +4,14 @@ FROM node:24-bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends util-linux passwd git \
     && rm -rf /var/lib/apt/lists/* \
-    && groupmod -n agent node \
-    && usermod -l agent -d /app/.home node \
+    && usermod -d /app/.home -s /bin/bash root \
     && mkdir -p /etc/dsh \
     && printf '/.home/\n/.home-import.*/\n' > /etc/dsh/gitignore \
-    && git config --system core.excludesFile /etc/dsh/gitignore
+    && git config --system core.excludesFile /etc/dsh/gitignore \
+    && git config --system --add safe.directory '*'
 ENV HOME=/app/.home \
+    USER=root \
+    LOGNAME=root \
     DSH_HOME=/app/.dsh \
     npm_config_prefix=/app/.home/.local \
     PNPM_HOME=/app/.home/.local/share/pnpm \
@@ -28,6 +30,7 @@ COPY cli-env.sh /usr/local/bin/cli-env.sh
 RUN chmod 0755 /usr/local/bin/dsh-entrypoint \
     && chmod 0644 /usr/local/bin/cli-env.sh \
     && ln -s /usr/local/bin/cli-env.sh /etc/profile.d/10-dsh-cli.sh
+USER 0:0
 WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/dsh-entrypoint"]
 CMD ["true"]

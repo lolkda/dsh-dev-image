@@ -38,8 +38,6 @@ ARG MAVEN_VERSION=3.9.16
 ARG GRADLE_VERSION=9.7.1
 ARG UV_VERSION=0.12.17
 ARG YQ_VERSION=4.53.6
-ARG USER_UID=1000
-ARG USER_GID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -134,7 +132,7 @@ ENV JAVA_HOME=/opt/java \
 #     fi
 #     export PATH
 #
-# 于是在 `bash -lc` / `su - agent` / `ssh` 里，上面 ENV PATH 里那些
+# 于是在 `bash -lc` / 登录 shell 里，上面 ENV PATH 里那些
 # /opt/* 和 /usr/local/{cargo,go} 全部消失。用真实镜像实测过：
 #
 #     bash -c   →  cargo/rustc/go/java/mvn/gradle 全部找得到
@@ -192,14 +190,12 @@ RUN set -eux; node -v; npm -v; yarn --version
 # 参数（Usage: cargo fmt [OPTIONS] [-- <rustfmt_options>...]），不接受 -V，
 # 会直接 exit 2 把构建打断。cargo clippy -V 是好的。
 #
-# 官方镜像会 chmod -R a+w 这两个目录，这里照做：即使以后去掉 /usr/local 的
-# chown，非 root 也还能用。
+# 运行时统一 root，不再为其他用户额外放宽工具链写权限。
 # -----------------------------------------------------------------------------
 COPY --from=src-rust /usr/local/rustup/ /usr/local/rustup/
 COPY --from=src-rust /usr/local/cargo/  /usr/local/cargo/
 RUN set -eux; \
     rustup component add clippy rustfmt; \
-    chmod -R a+w /usr/local/rustup /usr/local/cargo; \
     rustup component list --installed; \
     rustc -V; cargo -V; cargo clippy -V; rustfmt --version
 
@@ -343,22 +339,14 @@ RUN set -eux; \
 RUN set -eux; ln -sfn /usr/bin/fdfind /usr/local/bin/fd; fd --version
 
 # -----------------------------------------------------------------------------
-# 非 root 用户 + /app
+# root-only + /app
 #
-# 保留 /usr/local 的历史构建属主，但运行时不递归改写它，也不依赖它安装用户 CLI。
-# 新 CLI 默认安装到 /app/.home/.local；显式系统级安装仍属于可丢弃的容器层。
-# 若需进一步收紧镜像工具链，可单独移除这里的 /usr/local chown
-# （rust 那两个目录已单独 a+w，不受影响）。
-#
-# /app 是唯一挂载点。挂载会遮蔽镜像里这一层，所以 entrypoint 在启动时
-# 在降权后补建子目录（卷首次挂载时是空的）；登录 shell 只负责恢复 PATH。
-#
-# git safe.directory 必设：挂载进来的目录属主和容器内 UID 不一致时，
-# git 会直接拒绝操作（"detected dubious ownership"）。
+# root 的账户家目录与运行时 HOME 保持一致（SSH 等工具会读取 passwd）。
+# /app 挂载会遮蔽镜像目录；入口只补缺失状态，不递归改变宿主文件属主。
+# 镜像工具保留构建期属主；新增 CLI 仍通过 /app/.home/.local 持久化。
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-    groupadd -g "${USER_GID}" agent; \
-    useradd -M -u "${USER_UID}" -g agent -d /app/.home -s /bin/bash agent; \
+    usermod -d /app/.home -s /bin/bash root; \
     mkdir -p /etc/dsh; \
     printf '/.home/\n/.home-import.*/\n' > /etc/dsh/gitignore; \
     git config --system core.excludesFile /etc/dsh/gitignore; \
@@ -366,7 +354,6 @@ RUN set -eux; \
              /app/.cache/cargo /app/.cache/go/pkg/mod /app/.cache/go/build \
              /app/.cache/pip /app/.cache/npm /app/.cache/m2 \
              /app/.cache/gradle /app/.cache/uv /app/.cache/pnpm-store; \
-    chown -R agent:agent /app /usr/local; \
     git config --system --add safe.directory '*'; \
     git config --system core.autocrlf false; \
     git config --system init.defaultBranch main
@@ -416,12 +403,6 @@ RUN set -eux; \
     grep -q "registerChildSetup" "$subagent_dir/lib/index.js"; \
     rm -rf /tmp/dsh-agent-team-model-pin-patches
 
-# npm 全局安装以 root 运行，会在 /usr/local/lib/node_modules 下新建 root-owned
-# 嵌套目录，覆盖前面的 chown。这里重新归权，恢复"agent 可写 /usr/local"的镜像
-# 约定，让运行中的 agent 以后无需 root 也能修改/重打这些包。
-RUN set -eux; \
-    chown -R agent:agent /usr/local/lib/node_modules
-
 # -----------------------------------------------------------------------------
 # 全链路冒烟：任一工具链没装好，构建就在这里失败，不会拖到运行时才发现
 #
@@ -464,7 +445,7 @@ RUN set -eux; \
     bash -n /usr/local/bin/dsh-entrypoint; \
     sh -n /usr/local/bin/cli-env.sh; \
     node --check /usr/local/bin/home-init.mjs; \
-    for c in setpriv usermod groupmod stat getent node; do \
+    for c in id mkdir dirname node; do \
         command -v "$c" >/dev/null || { echo "entrypoint 依赖缺失: $c" >&2; exit 1; }; \
     done
 
@@ -485,11 +466,8 @@ RUN set -eux; \
 # CMD 设成 dsh web，所以 `docker run <image>` 开箱即用；要 shell 就
 # `docker run -it <image> bash`（参数会覆盖 CMD）。
 #
-# 【刻意不写 USER agent】—— 入口需要先以 root 跑，才能把挂载进来的 /app
-# 交给 agent 并降权（见 entrypoint.sh 头部注释）。真正的进程在 setpriv
-# 降权之后才启动，跑起来仍是 UID 1000 的 agent，不是 root。
-# 代价是 `docker exec` 进去默认也是 root；要 agent 身份就：
-#     docker compose exec --user agent agent bash
+# 入口、插件、DSH 和默认 docker exec 统一为 root，不使用 sudo 或降权。
+# HOME 仍位于 /app/.home；容器重建不迁移或接管已有工作区文件。
 # -----------------------------------------------------------------------------
 # 运行时包源放在工具链安装之后：固定版本从官方构建，用户依赖默认走国内镜像。
 # 镜像站可能尚未同步新版本（曾实际缺少 uv 0.12.17），不因此降级工具链。
@@ -503,6 +481,8 @@ ENV npm_config_registry=https://registry.npmmirror.com \
 # 用户 CLI 默认值仅在工具链安装完成后启用，避免把镜像内 DSH/pnpm 装进卷。
 # 项目依赖和 venv 不变；Python CLI 使用 uv tool install 或 pip install --user。
 ENV HOME=/app/.home \
+    USER=root \
+    LOGNAME=root \
     npm_config_prefix=/app/.home/.local \
     PNPM_HOME=/app/.home/.local/share/pnpm \
     YARN_PREFIX=/app/.home/.local \
@@ -516,6 +496,7 @@ ENV HOME=/app/.home \
     PATH=/app/.home/.local/bin:/app/.home/.local/share/pnpm/bin:${PATH}:/app/.home/bin \
     DSH_PLUGINS="@lolkda/dsh-web-lan dsh-auto-thinking-levels"
 
+USER 0:0
 WORKDIR /app
 EXPOSE 3080
 ENTRYPOINT ["/usr/local/bin/dsh-entrypoint"]

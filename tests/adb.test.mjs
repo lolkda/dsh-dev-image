@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-// 轻量配置 contract；真实非 root 任意目录执行另在 Docker CI 的 image-smoke.sh 中验证。
+// 轻量配置 contract；真实 root 任意目录执行另在 Docker CI 的 image-smoke.sh 中验证。
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const dockerfile = read('Dockerfile');
 // 只认最终镜像 stage：源 stage（src-node / src-rust）装上 adb 不算交付。
