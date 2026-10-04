@@ -135,9 +135,23 @@ test('image provides persistent HOME even for docker exec', () => {
 for (const path of ['Dockerfile', 'tests/Dockerfile']) {
   test(`${path}: root account and default exec share the persistent HOME`, () => {
     const source = read(path);
-    assert.match(source, /usermod -d \/app\/\.home -s \/bin\/bash root/);
+    assert.match(source, /sed -i '[^']+' \/etc\/passwd/);
+    assert.match(source, /test "\$\(getent passwd root \| cut -d: -f6-7\)" = \/app\/\.home:\/bin\/bash/);
+    assert.doesNotMatch(source, /\busermod\b/);
     assert.match(source, /^USER 0:0$/m);
     assert.doesNotMatch(source, /USER_UID|USER_GID|agent:agent|\b(?:useradd|groupadd)\b/);
+  });
+  test(`${path}: build-time account edit preserves identities and unrelated users`, () => {
+    const expression = read(path).match(/sed -i '([^']+)' \/etc\/passwd/)?.[1];
+    assert.ok(expression, 'Missing offline root account transformation');
+    for (const oldHome of ['/root', '/existing/home']) {
+      const otherAccounts = 'node:x:1000:1000:Node:/home/node:/bin/sh\notherroot:x:0:0:Other:/other:/bin/sh\n';
+      const input = `root:x:0:0:Root User:${oldHome}:/bin/sh\n${otherAccounts}`;
+      const result = spawnSync('sed', [expression], { input, encoding: 'utf8', timeout: 10_000 });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, `root:x:0:0:Root User:/app/.home:/bin/bash\n${otherAccounts}`);
+    }
   });
 }
 

@@ -346,7 +346,8 @@ RUN set -eux; ln -sfn /usr/bin/fdfind /usr/local/bin/fd; fd --version
 # 镜像工具保留构建期属主；新增 CLI 仍通过 /app/.home/.local 持久化。
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-    usermod -d /app/.home -s /bin/bash root; \
+    sed -i 's#^\(root:[^:]*:0:0:[^:]*:\)[^:]*:[^:]*$#\1/app/.home:/bin/bash#' /etc/passwd; \
+    test "$(getent passwd root | cut -d: -f6-7)" = /app/.home:/bin/bash; \
     mkdir -p /etc/dsh; \
     printf '/.home/\n/.home-import.*/\n' > /etc/dsh/gitignore; \
     git config --system core.excludesFile /etc/dsh/gitignore; \

@@ -9,6 +9,7 @@ Status: implemented
 ## Decision
 
 - [镜像定义](../../../../Dockerfile)和两份 Compose 固定 `0:0`；入口、插件、DSH 及默认 exec 都直接使用 root，不经过 sudo，不支持非 root 入口。
+- 构建时仅替换 `/etc/passwd` 中 root 的 HOME/shell 字段，保留 UID/GID、密码占位和其他账户，并立即校验结果。使用 `usermod` 本来可以复用系统账户工具，但 [CI 37204734771](https://github.com/lolkda/dsh-dev-image/actions/runs/37204734771) 证明它拒绝修改 PID 1 正在使用的 root（exit 8）；因此不在构建期调用它，也不把账户修改延迟到运行期。
 - [入口](../../../../entrypoint.sh)删除 agent 账户依赖和 UID/GID 跟随机制；镜像不再提供 USER_UID/USER_GID 构建参数。非空 AGENT_UID/AGENT_GID 是过时配置，入口明确拒绝，不静默换身份。
 - `/app` 仍为唯一持久化挂载；HOME、root 的账户家目录均为 `/app/.home`。CLI 安装、缓存、插件目录和用户文件保留原布局，不重置或递归 chown 数据。初始化只补缺失 Shell 文件，HOME 仍收紧为 0700。
 - Compose 保留 cap_drop ALL、no-new-privileges 和已有 SYS_PTRACE/CHOWN；删除 SETUID/SETGID，增加 DAC_OVERRIDE/FOWNER。后两者允许读写旧 UID 文件及初始化旧 HOME 权限。CHOWN 仅供用户在容器内显式处理个别属主检查或包管理器使用，入口不自动归权，不开放 privileged。
@@ -44,7 +45,8 @@ Status: implemented
 - `node --test tests/*.test.mjs`：120 项，107 通过、13 因缺少真实 root 环境明确跳过、0 失败。真实非 root 入口拒绝已执行。
 - `bash -n`、`sh -n cli-env.sh`、`shellcheck`、`node --check home-init.mjs`、`git diff --check` 通过。
 - `npm run verify-notes` 通过。
-- 未执行真实 root 入口成功路径、Docker Compose 展开、镜像构建、容器权限/CLI/旧 HOME 导出和完整 DSH 启动验收。当前环境为 UID 1000，无 Docker/sudo，unshare 返回 Operation not permitted；不通过修改入口或模拟 UID 来掩盖缺口。[CI](../../../../.github/workflows/verify-layout.yml)以真实 root 运行入口用例，并构建独立测试镜像验证挂载权限；尚未在本次会话运行该 CI。
+- 本地未执行真实 root 入口成功路径、Docker Compose 展开、镜像构建、容器权限/CLI/旧 HOME 导出和完整 DSH 启动验收。当前环境为 UID 1000，无 Docker/sudo，unshare 返回 Operation not permitted；不通过修改入口或模拟 UID 来掩盖缺口。
+- [CI 37204734771](https://github.com/lolkda/dsh-dev-image/actions/runs/37204734771) 已通过真实 root Shell 入口回归（21 项）、Node 回归（119 通过、1 项非 root 用例跳过）及两份 Compose 展开；随后测试镜像在 `usermod root` 处 exit 8。构建修复的 43 项配置测试已本地通过，其中真实 sed 用例验证仅更改 root HOME/shell，不更改其他字段或账户；修复后的容器构建与发布仍须以新一轮 CI 为准。
 
 ## Consequences
 
