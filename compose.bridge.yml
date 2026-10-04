@@ -41,15 +41,9 @@ services:
     pids_limit: 2048
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
+    # 使用 Docker 默认 capabilities，只额外启用调试能力。
     cap_add:
       - SYS_PTRACE
-      # 允许在容器内手动调整单个文件归属；入口不自动归权。
-      - CHOWN
-      # 访问旧 UID 的文件，并允许 HOME 权限收紧；不修改文件属主。
-      - DAC_OVERRIDE
-      - FOWNER
 
     logging:
       driver: json-file

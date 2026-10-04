@@ -12,7 +12,7 @@ Status: implemented
 - 构建时仅替换 `/etc/passwd` 中 root 的 HOME/shell 字段，保留 UID/GID、密码占位和其他账户，并立即校验结果。使用 `usermod` 本来可以复用系统账户工具，但 [CI 37204734771](https://github.com/lolkda/dsh-dev-image/actions/runs/37204734771) 证明它拒绝修改 PID 1 正在使用的 root（exit 8）；因此不在构建期调用它，也不把账户修改延迟到运行期。
 - [入口](../../../../entrypoint.sh)删除 agent 账户依赖和 UID/GID 跟随机制；镜像不再提供 USER_UID/USER_GID 构建参数。非空 AGENT_UID/AGENT_GID 是过时配置，入口明确拒绝，不静默换身份。
 - `/app` 仍为唯一持久化挂载；HOME、root 的账户家目录均为 `/app/.home`。CLI 安装、缓存、插件目录和用户文件保留原布局，不重置或递归 chown 数据。初始化只补缺失 Shell 文件，HOME 仍收紧为 0700。
-- Compose 保留 cap_drop ALL、no-new-privileges 和已有 SYS_PTRACE/CHOWN；删除 SETUID/SETGID，增加 DAC_OVERRIDE/FOWNER。后两者允许读写旧 UID 文件及初始化旧 HOME 权限。CHOWN 仅供用户在容器内显式处理个别属主检查或包管理器使用，入口不自动归权，不开放 privileged。
+- 初版能力配置（仅本项由[恢复 Docker 默认能力](2026-10-04-docker-default-capabilities.md)取代）：Compose 保留 cap_drop ALL、no-new-privileges 和已有 SYS_PTRACE/CHOWN；删除 SETUID/SETGID，增加 DAC_OVERRIDE/FOWNER。后两者允许读写旧 UID 文件及初始化旧 HOME 权限。CHOWN 仅供用户在容器内显式处理个别属主检查或包管理器使用，入口不自动归权，不开放 privileged。
 - [CLI 环境模块](../../../../cli-env.sh)不再排除 root，安装时机仍在镜像工具链安装之后；登录 Shell 与裸 docker exec 使用同一持久化布局。
 - [显式旧 HOME 导出工具](../../../../scripts/migrate-home.sh)仅把新导出副本准备为 0:0，不修改源容器和工作区；已有 `.home` 仍拒绝覆盖。
 - 非 root、过时配置、只读挂载、受管路径类型错误在插件/主命令前失败。CLI/PATH、插件参数、失败策略和选定 profile 保持原有行为。

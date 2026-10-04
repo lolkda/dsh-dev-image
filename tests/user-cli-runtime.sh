@@ -25,7 +25,7 @@ docker run --rm --network none --user 0 --entrypoint /bin/bash \
         chmod 755 /cases/default
         chmod 700 /cases/legacy /cases/legacy/.home
     '
-caps=(--cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER
+caps=(--cap-add SYS_PTRACE
       --security-opt no-new-privileges:true)
 for identity in default legacy; do
     args=(--network none "${caps[@]}" -e DSH_PLUGINS=

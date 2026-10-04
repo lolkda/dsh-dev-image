@@ -36,7 +36,7 @@ main() {
     cookie_jar="$(mktemp)"
     trap cleanup EXIT
 
-    local caps=(--cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER
+    local caps=(--cap-add SYS_PTRACE
                 --security-opt no-new-privileges:true)
     for mode in -ec -lec; do
         docker run --rm "${caps[@]}" \

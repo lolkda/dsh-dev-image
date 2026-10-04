@@ -77,7 +77,7 @@ docker run -d --name dsh-agent --restart unless-stopped --network host \
 
 ### 用 compose：多了资源限制和日志上限
 
-服务器上还跑着别的服务时建议用这个（`cpus` / `mem_limit` / `pids_limit` / 日志上限 / `cap_drop`）。
+服务器上还跑着别的服务时建议用这个（`cpus` / `mem_limit` / `pids_limit` / 日志上限）。
 
 ```bash
 git clone https://github.com/lolkda/dsh-dev-image.git
@@ -118,11 +118,11 @@ docker compose logs -f          # 第一次会装插件，等几秒
 ```
 
 - **不递归 chown**：工程、`.git`、旧 HOME、插件和缓存文件保留原属主。新文件通常属于 root；宿主普通用户直接编辑这些文件可能需要 sudo。
-- **旧 UID 数据可继续访问**：两份 Compose 保留 `cap_drop: ALL`，保留原有的 `SYS_PTRACE/CHOWN`，添加 `DAC_OVERRIDE/FOWNER`。后两者分别允许访问旧属主文件，以及将旧 HOME 权限收紧为 `0700`；不再添加 `SETUID/SETGID`，不启用 privileged。保留 `CHOWN` 只是允许你在容器内手动调整个别文件归属，入口不会自动归权。
+- **旧 UID 数据可继续访问**：两份 Compose 使用 Docker 默认 capabilities，仅额外添加调试用的 `SYS_PTRACE`，不再维护极窄的能力白名单，也不启用 privileged。默认能力包括 `CHOWN/DAC_OVERRIDE/FOWNER`，允许手动调整归属、访问旧 UID 文件和收紧 HOME 权限；`SETUID/SETGID` 等常用能力也恢复。入口仍不会自动归权或降权。
 - **仍有明确边界**：root 不绕过只读挂载、NFS root-squash、用户命名空间映射或工具自身的校验。HOME、状态和 CLI 目录被文件/符号链接占用，或不可写时，会在插件和主命令前失败；`DSH_PLUGINS_REQUIRED=0` 不跳过权限错误。
 - **配置与凭据不被覆盖**：仅补缺失的 Shell 默认文件。某些工具（例如 OpenSSH）会检查配置属主，旧 UID 配置即使能读取也可能被工具拒绝；这类文件可在容器内按实际报错单独调整归属，不自动接管整个 HOME。
 
-**从 agent 版本升级：** 使用新版 Compose，并移除部署面板中的非 root `user`、`AGENT_UID/AGENT_GID` 环境覆盖及 `USER_UID/USER_GID` 构建参数。非 root 入口或直接传入非空旧身份变量会明确报错。已有 `/app/.home` 不需要为了入口检查而更换属主，也不要重新导入或删除它。若保留自定义 `cap_drop: ALL`，需同步加入 `DAC_OVERRIDE/FOWNER`；只改 `user: root` 不够。
+**从 agent 版本升级：** 使用新版 Compose，并移除部署面板中的非 root `user`、`AGENT_UID/AGENT_GID` 环境覆盖及 `USER_UID/USER_GID` 构建参数。非 root 入口或直接传入非空旧身份变量会明确报错。已有 `/app/.home` 不需要为了入口检查而更换属主，也不要重新导入或删除它。旧 Compose 中的 `cap_drop: ALL` 应一并删除，只保留额外的 `SYS_PTRACE`；只改 `user: root` 不会恢复被丢弃的能力。
 
 > 镜像支持的部署布局固定为 `/app`。入口的 `APP_DIR` 仅用于隔离测试等底层调用；仅修改它不会同步镜像 ENV、账户 HOME 与登录 PATH，不应用它改变部署布局。
 
@@ -570,7 +570,7 @@ AGENT_HOME="$(mktemp -d)" DSH_PLUGINS='' docker compose run --rm --no-deps agent
 
 - **没有挂 `/var/run/docker.sock`**。挂上等于容器内 root == 宿主机 root == 所有服务暴露。需要"容器里再跑容器"时，用 Sysbox 或 socket-proxy 单独解决。
 - **资源限死**：`cpus` / `mem_limit` / `pids_limit`。`pids_limit` 是防 fork bomb 的，agent 跑失控构建会 fork 爆宿主机。
-- **root-only + 有限 capabilities**：`cap_drop: ALL` 后仅添加 `SYS_PTRACE/CHOWN/DAC_OVERRIDE/FOWNER`，保留 `no-new-privileges`，不加 privileged。`NET_RAW` 等能力仍不提供；root 身份不等于绕过所有容器边界。
+- **root-only + Docker 默认 capabilities**：不写 `cap_drop`，仅额外添加 `SYS_PTRACE`，保留 `no-new-privileges`，不加 privileged。默认能力不等于全部能力，`SYS_ADMIN/NET_ADMIN` 等仍未额外开放；也不会自动获得宿主文件系统、Docker socket 或所有设备。
 - **日志上限 10MB × 3**，防止长输出写满磁盘。
 - host 模式下**必须**配防火墙，见上文。
 
@@ -641,7 +641,7 @@ docker build -f tests/Dockerfile -t dsh-entrypoint-test .
 bash tests/container-runtime.sh dsh-entrypoint-test
 ```
 
-[容器回归脚本](tests/container-runtime.sh) 使用真实文件权限和 capabilities，覆盖 root 启动、旧 UID 的 `0700` 工作区与私有 HOME、深层混合属主文件读写且不改归属、重启、非 root/旧身份配置拒绝、缺少 capabilities、只读挂载和符号链接等场景；不会用 mock 冒充 Linux 权限模型。
+[容器回归脚本](tests/container-runtime.sh) 使用真实文件权限和 Docker 默认 capabilities，额外验证测试子进程可切换到 1000:1000，覆盖 root 启动、旧 UID 的 `0700` 工作区与私有 HOME、深层混合属主文件读写且不改归属、重启、非 root/旧身份配置拒绝、缺少 capabilities、只读挂载和符号链接等场景；不会用 mock 冒充 Linux 权限模型。
 
 完整镜像验收（需要网络安装默认插件）：
 

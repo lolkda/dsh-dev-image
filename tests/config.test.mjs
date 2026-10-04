@@ -55,12 +55,12 @@ for (const path of ['compose.yml', 'compose.bridge.yml']) {
     assert.doesNotMatch(source, /^\s+(GO_VERSION|JDK_VERSION|DSH_VERSION|PNPM_VERSION|TYPESCRIPT_VERSION|TSX_VERSION|USER_UID|USER_GID):/m);
   });
 
-  test(`${path}: root-only identity with bounded legacy-data capabilities`, () => {
+  test(`${path}: root-only identity with Docker defaults and only extra ptrace`, () => {
     assert.match(source, /^\s+user: "0:0"$/m);
     assert.doesNotMatch(source, /^\s+AGENT_(UID|GID):/m);
     const caps = source.match(/cap_add:\n((?:\s+(?:#.*|- [A-Z_]+)\n)+)/)?.[1] ?? '';
-    assert.deepEqual([...caps.matchAll(/- ([A-Z_]+)/g)].map(match => match[1]).sort(), ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SYS_PTRACE']);
-    assert.match(source, /cap_drop:\n\s+- ALL/);
+    assert.deepEqual([...caps.matchAll(/- ([A-Z_]+)/g)].map(match => match[1]).sort(), ['SYS_PTRACE']);
+    assert.doesNotMatch(source, /^\s*cap_drop:/m);
     assert.match(source, /no-new-privileges:true/);
     assert.doesNotMatch(source, /privileged:\s*true/);
   });

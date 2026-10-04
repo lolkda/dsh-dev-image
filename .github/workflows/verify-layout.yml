@@ -44,5 +44,5 @@ jobs:
           tags: dsh-entrypoint-test:ci
           cache-from: type=gha,scope=entrypoint-tests
           cache-to: type=gha,scope=entrypoint-tests,mode=max
-      - name: Real Linux permissions under minimal capabilities
+      - name: Real Linux permissions under Docker default capabilities
         run: bash tests/container-runtime.sh dsh-entrypoint-test:ci

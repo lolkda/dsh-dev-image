@@ -44,7 +44,7 @@ test "$(docker inspect --format '{{.State.ExitCode}}' "$legacy")" = 0
 run_migration "$legacy" "$scratch/app"
 test "$(docker inspect --format '{{.State.Running}}' "$legacy")" = false
 
-docker run --rm --network none --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+docker run --rm --network none --cap-add SYS_PTRACE \
     --security-opt no-new-privileges:true -e DSH_PLUGINS= \
     --mount "type=bind,source=$scratch/app,target=/app" "$image" bash -euc '
         test "$(id -u):$(id -g)" = 0:0
