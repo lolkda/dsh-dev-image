@@ -8,3 +8,5 @@
 !entrypoint.sh
 !home-init.mjs
 !cli-env.sh
+!patches/
+!patches/**

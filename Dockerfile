@@ -398,6 +398,31 @@ RUN set -eux; \
     tsc --version; tsx --version
 
 # -----------------------------------------------------------------------------
+# DSH 宿主补丁：给 @deepseek-ai/dsh-subagent 加 childSetupVersion=1 接口。
+# 仅当 stock 版本尚未打补丁时应用；打不上直接让镜像构建失败，避免运行时才发现
+# `/team-preset` 无法保存具体 Agent 预设。
+# 路径是 npm 全局安装 @deepseek-ai/dsh 后的嵌套依赖布局。
+# -----------------------------------------------------------------------------
+COPY patches/ /tmp/dsh-agent-team-model-pin-patches/
+RUN set -eux; \
+    subagent_dir="$(npm root -g)/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subagent"; \
+    test -d "$subagent_dir"; \
+    if grep -q "get childSetupVersion" "$subagent_dir/lib/index.js"; then \
+        echo "childSetupVersion already present; skip host patch"; \
+    else \
+        patch --fuzz=0 -p1 -d "$subagent_dir" < /tmp/dsh-agent-team-model-pin-patches/dsh-subagent-child-setup-v1.patch; \
+    fi; \
+    grep -q "get childSetupVersion" "$subagent_dir/lib/index.js"; \
+    grep -q "registerChildSetup" "$subagent_dir/lib/index.js"; \
+    rm -rf /tmp/dsh-agent-team-model-pin-patches
+
+# npm 全局安装以 root 运行，会在 /usr/local/lib/node_modules 下新建 root-owned
+# 嵌套目录，覆盖前面的 chown。这里重新归权，恢复"agent 可写 /usr/local"的镜像
+# 约定，让运行中的 agent 以后无需 root 也能修改/重打这些包。
+RUN set -eux; \
+    chown -R agent:agent /usr/local/lib/node_modules
+
+# -----------------------------------------------------------------------------
 # 全链路冒烟：任一工具链没装好，构建就在这里失败，不会拖到运行时才发现
 #
 # 两个 shell 都测：`bash -c` 走 ENV PATH，`bash -lc` 走 /etc/profile
