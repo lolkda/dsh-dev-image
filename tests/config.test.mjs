@@ -184,6 +184,16 @@ test('startup checks do not mistake a previous latest image for this revision', 
   assert.match(source, /tests\/container-runtime\.sh/);
 });
 
+
+test('Docker builds configure a registry mirror without weakening candidate validation', () => {
+  for (const path of ['.github/workflows/verify-layout.yml', '.github/workflows/build.yml']) {
+    const source = read(path);
+    assert.match(source, /buildkitd-config-inline:/, `${path} is missing BuildKit registry configuration`);
+    assert.match(source, /\[registry\."docker\.io"\]/, `${path} does not target Docker Hub`);
+    assert.match(source, /mirrors = \["mirror\.gcr\.io"\]/, `${path} is missing the configured mirror`);
+  }
+});
+
 test('publication depends on tests of the loaded candidate and immutable digests', () => {
   const source = read('.github/workflows/build.yml');
   assert.match(source, /load:\s*true/);

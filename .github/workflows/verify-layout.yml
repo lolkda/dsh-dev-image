@@ -35,6 +35,10 @@ jobs:
           DSH_PLUGINS='' docker compose -f compose.yml config --format json | jq -e '.services.agent.environment.DSH_PLUGINS == ""'
           DSH_PLUGINS='' docker compose -f compose.bridge.yml config --format json | jq -e '.services.agent.environment.DSH_PLUGINS == ""'
       - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: Build lightweight entrypoint test image
         uses: docker/build-push-action@v6
         with:
