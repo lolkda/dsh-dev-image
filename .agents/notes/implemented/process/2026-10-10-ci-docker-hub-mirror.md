@@ -8,7 +8,7 @@ GitHub Actions 37992188725 及 37992575653 在轻量测试镜像解析 node:24-b
 
 ## Decision
 
-仅在轻量测试和正式候选镜像的 BuildKit builder 配置 docker.io 的 mirror.gcr.io 缓存镜像源。Dockerfile 保持官方镜像引用、版本及平台不变，允许 BuildKit 在缓存未命中时回退 Docker Hub。保留现有权限测试、全工具链/Web 测试和双架构通过才发布的门槛。
+轻量测试、正式候选构建和 manifest 发布的 BuildKit builder 都使用 `mirror.gcr.io/moby/buildkit:buildx-stable-1` 作为引导镜像，并为 `docker.io` 配置 `mirror.gcr.io` 镜像源。Dockerfile 保持官方镜像引用、版本及平台不变；BuildKit 镜像自身不再依赖 Docker Hub，基础镜像缓存未命中时仍由配置的 Docker Hub 镜像源处理。保留现有权限测试、全工具链/Web 测试和双架构通过才发布的门槛。
 
 ## Alternatives considered
 
@@ -16,7 +16,7 @@ Docker Hub 登录可提高配额且继续直接使用原源，但需要用户提
 
 ## Testing
 
-两处 BuildKit builder 均已配置同一 Docker Hub 镜像缓存规则，候选镜像的权限、工具链/Web 验收和双架构发布门槛保持不变。针对性配置与笔记测试共 50 项通过；actionlint 未安装，因此未执行该工具校验。GitHub Actions 后续运行仍需确认镜像源是否能越过外部 429。
+两处构建 workflow 和 publish builder 均已配置 BuildKit 引导镜像及 Docker Hub 镜像缓存规则，候选镜像的权限、工具链/Web 验收和双架构发布门槛保持不变。第一次修复后的运行 37994586101 已越过配置测试，但在 `setup-buildx-action` 拉取 `moby/buildkit:buildx-stable-1` 时超时，故补充 `driver-opts` 指定镜像。针对性配置与笔记测试共 50 项通过；actionlint 未安装，因此未执行该工具校验。GitHub Actions 后续运行仍需确认镜像源是否可用。
 
 ## Consequences
 
