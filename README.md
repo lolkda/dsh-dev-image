@@ -17,7 +17,7 @@
 | Go | 1.27.1 | go.dev 官方 tarball |
 | Java | Temurin 24.0.2+12 | Adoptium API tarball |
 | git | bookworm apt | — |
-| DSH | 0.2.0-rc.2 | npm |
+| DSH | 0.2.1-alpha.2 | npm |
 | pnpm | 12.4.2 | npm（`dsh plugin` 依赖它） |
 
 Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，所以 COPY 安全。Go 和 Java 不走 COPY，原因见下。
@@ -37,8 +37,33 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 | 构建 | `cmake` `ninja` `autoconf` `automake` `libtool` | C / C++ 项目 |
 | 调试 | `gdb` `strace` | 需要 `cap_add: SYS_PTRACE`，compose 里已配好 |
 | Android 调试 | `adb` | 设备调试 CLI，来自 Debian 归档包而非完整 SDK；[用法与边界见下](#adbandroid-调试桥) |
+| APK 分析 | `apktool` 3.0.3 | 官方 JAR + SHA-256 校验，复用镜像 Java；支持任意目录直接调用 |
+| 动态插桩 | `frida` 17.23.1 / `frida-tools` 14.11.0 | 独立 Python 环境，系统 PATH 提供 `frida`、`frida-ps`、`frida-trace` 等 CLI |
 | 版本控制 | `git` `git-lfs` `gh` | |
 | 其他 | `shellcheck` `bc` `rsync` `zip` / `unzip` | |
+
+`apktool` 已安装到系统 `PATH`，普通 shell、登录 shell 和裸 `docker exec` 均可调用，不需要进入安装目录：
+
+```bash
+apktool --version
+apktool d /path/to/app.apk -o /path/to/decoded
+apktool b /path/to/decoded -o /path/to/rebuilt.apk
+docker exec --workdir /tmp dsh-agent apktool --version
+```
+
+新增工具需要重建镜像并重建容器，已运行的旧容器不会自动获得 apktool。构建参数 `APKTOOL_VERSION` 与 `APKTOOL_SHA256` 必须配套更新。
+
+Frida CLI 同样支持任意目录调用，无需激活 Python 环境：
+
+```bash
+frida --version
+frida-ps --help
+frida-trace --help
+frida-ls-devices
+docker exec --workdir /tmp dsh-agent frida --version
+```
+
+`frida-tools` 安装在隔离环境 `/opt/frida`，其 `frida*` 命令链接到 `/usr/local/bin`；不会向系统 Python 注入这些依赖。`frida --version` 显示的是核心 `FRIDA_VERSION`，而不是 `FRIDA_TOOLS_VERSION`。两项构建参数固定且需保持兼容。只内置客户端，不安装或启动 `frida-server`；连接设备时自行部署与核心版本、目标架构匹配的 server。新增 Frida 同样需要重建镜像和容器。
 
 **语言工具链补全**（apt 给不了、或给的版本不能用）：
 
@@ -422,7 +447,7 @@ docker compose build --build-arg JDK_VERSION=25
 |---|---|---|
 | `GO_VERSION` | `1.27.1` | 校验和从 go.dev API 现取，改版本不用手改 sha |
 | `JDK_VERSION` | `24` | Adoptium 的 feature version |
-| `DSH_VERSION` | `0.2.0-rc.2` | npm 版本号或 dist-tag |
+| `DSH_VERSION` | `0.2.1-alpha.2` | npm 版本号或 dist-tag |
 | `PNPM_VERSION` | `12.4.2` | — |
 | `TYPESCRIPT_VERSION` | `7.0.2` | TypeScript 编译器 `tsc` |
 | `TSX_VERSION` | `4.23.15` | TS / TSX 脚本运行器 |
@@ -603,7 +628,7 @@ node 镜像把 yarn 装在 `/opt/yarn-1.22.22/`，而 `/usr/local/bin/yarn` 是�
 musl libc 和 manylinux wheel、native node 模块、JVM 全部不兼容，等于逼你从源码构建一切。
 
 **`dsh` 不用 `@latest`。**
-npm 上 `latest` = `0.1.7-rc.2`，比 `next` = `0.2.0-rc.2` 还旧，`npm i -g @deepseek-ai/dsh` 会装到旧版本。
+dist-tag 会变化，且不保证指向所需的预发布版本。镜像通过 `DSH_VERSION` 显式固定为 `0.2.1-alpha.2`，避免重建时随标签漂移。
 
 **镜像工具链与用户 CLI 分开。**
 `/usr/local` 保留构建期属主，运行时 root 可修改它，但容器重建后丢弃；新用户 CLI 通过持久化 HOME 下的原生安装目录避免重建丢失。显式指定 `/usr/local` 的系统级安装不保证重建后保留。DSH 插件继续安装在 `/app/.dsh`，项目依赖优先使用工作区或虚拟环境。

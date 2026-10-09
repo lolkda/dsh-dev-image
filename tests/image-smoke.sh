@@ -47,7 +47,7 @@ main() {
             test "$HOME" = /app/.home
             test "$(getent passwd root | cut -d: -f6)" = "$HOME"
             test -d "$HOME" && test ! -L "$HOME"
-            for tool in adb python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
+            for tool in frida frida-ps frida-trace frida-ls-devices apktool adb python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
                         git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
                 command -v "$tool" >/dev/null
             done
@@ -55,6 +55,8 @@ main() {
             # 交互 shell 或入口对 PATH 的额外处理。entrypoint.sh 会无条件 cd "$APP_DIR"，
             # 所以给 docker run 加 --workdir 并不足以证明"任意目录"，必须在这里自己切；
             # 用 subshell 是为了不改动本块其余断言（pnpm store / cargo build）依赖的 cwd。
+            (cd /tmp && apktool --version)
+            (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null)
             adb_from_tmp="$(cd /tmp && test "$PWD" = /tmp && adb version)"
             printf "Verified adb CLI from /tmp: %s\n" "$adb_from_tmp"
             printf "%s\n" "$adb_from_tmp" | grep -i "^Android Debug Bridge version " >/dev/null
@@ -180,6 +182,11 @@ main() {
     docker exec --workdir /tmp "$web_id" adb version \
         | grep -i "^Android Debug Bridge version " >/dev/null
     printf 'Verified adb CLI over bare docker exec from /tmp\n'
+    docker exec --workdir /tmp "$web_id" apktool --version
+    docker exec --workdir /tmp "$web_id" frida --version
+    for tool in frida-ps frida-trace frida-ls-devices; do
+        docker exec --workdir /tmp "$web_id" "$tool" --help >/dev/null
+    done
     printf '\n=== FULL IMAGE AND AUTHENTICATED WEB STARTUP PASSED ===\n'
 }
 

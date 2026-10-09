@@ -8,5 +8,6 @@
 !entrypoint.sh
 !home-init.mjs
 !cli-env.sh
+!apktool.sh
 !patches/
 !patches/**

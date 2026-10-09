@@ -30,7 +30,7 @@ FROM python:3.12-slim-bookworm
 
 ARG GO_VERSION=1.27.1
 ARG JDK_VERSION=24
-ARG DSH_VERSION=0.2.0-rc.2
+ARG DSH_VERSION=0.2.1-alpha.2
 ARG PNPM_VERSION=12.4.2
 ARG TYPESCRIPT_VERSION=7.0.2
 ARG TSX_VERSION=4.23.15
@@ -38,6 +38,10 @@ ARG MAVEN_VERSION=3.9.16
 ARG GRADLE_VERSION=9.7.1
 ARG UV_VERSION=0.12.17
 ARG YQ_VERSION=4.53.6
+ARG FRIDA_VERSION=17.23.1
+ARG FRIDA_TOOLS_VERSION=14.11.0
+ARG APKTOOL_VERSION=3.0.3
+ARG APKTOOL_SHA256=dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -229,6 +233,20 @@ RUN set -eux; \
     java -version
 
 # -----------------------------------------------------------------------------
+# Apktool —— 官方 JAR 复用镜像 Java，避免 apt 引入第二套 Java 运行时。
+# 启动脚本位于已有 PATH 中，绝对路径定位 JAR，不依赖调用目录。
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    mkdir -p /opt/apktool; \
+    curl -fsSL -o /opt/apktool/apktool.jar \
+        "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"; \
+    echo "${APKTOOL_SHA256}  /opt/apktool/apktool.jar" | sha256sum -c -
+COPY apktool.sh /usr/local/bin/apktool
+RUN set -eux; \
+    chmod 0755 /usr/local/bin/apktool; \
+    test "$(apktool --version)" = "$APKTOOL_VERSION"
+
+# -----------------------------------------------------------------------------
 # Maven —— 走官方 tarball，理由和 Gradle 不同
 #
 # Debian 的 maven 包硬依赖 default-jre-headless，apt 会连带装进整套
@@ -306,6 +324,24 @@ RUN set -eux; \
     uv --version
 
 # -----------------------------------------------------------------------------
+# Frida CLI —— 独立 venv 隔离依赖，系统 PATH 中提供所有 frida* 入口。
+# 不需要激活 venv；绝对 shebang 保留解释器位置，不依赖 cwd 或用户 HOME。
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    python -m venv /opt/frida; \
+    /opt/frida/bin/python -m pip install --no-cache-dir --index-url https://pypi.org/simple \
+        "frida==${FRIDA_VERSION}" "frida-tools==${FRIDA_TOOLS_VERSION}"; \
+    /opt/frida/bin/python -m pip check; \
+    for cli in /opt/frida/bin/frida*; do \
+        test -x "$cli"; \
+        ln -s "$cli" "/usr/local/bin/$(basename "$cli")"; \
+    done; \
+    test "$(frida --version)" = "$FRIDA_VERSION"; \
+    frida-ps --help >/dev/null; \
+    frida-trace --help >/dev/null; \
+    frida-ls-devices --help >/dev/null
+
+# -----------------------------------------------------------------------------
 # yq v4 —— 走官方二进制，不用 apt
 #
 # Debian bookworm 的 yq 是 **3.1.0**，那是 Python 版、语法和 mikefarah v4
@@ -366,8 +402,8 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # DeepSeek Harness + pnpm + TypeScript
 #
-# 不要用 @latest：npm 上 latest=0.1.7-rc.2，比 next=0.2.0-rc.2 还旧，
-# `npm i -g @deepseek-ai/dsh` 会装到旧版本。这里默认锁到当前 next 的版本。
+# 不要用 @latest：dist-tag 会变化，且不保证指向所需的预发布版本。
+# 这里通过 DSH_VERSION 显式固定版本，避免重建时随标签漂移。
 #
 # pnpm 是必需的：`dsh plugin --profile <p> add <spec>` 的实现就是"把剩余参数
 # 转发给 profile 目录里的 pnpm"。没有 pnpm 就装不了任何插件。
@@ -427,6 +463,8 @@ RUN set -eux; \
              sqlite3 --version; tmux -V; shellcheck --version; \
              gh --version; gdb --version; strace -V; \
              adb version; \
+              (cd /tmp && apktool --version); \
+              (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null); \
              for c in xxd file tree nc dig ss lsof bc man; do command -v "$c" >/dev/null; done; \
              dsh --help > /dev/null'; \
     done; \
