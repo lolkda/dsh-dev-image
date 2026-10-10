@@ -216,7 +216,7 @@ PR 只测试 amd64、不推送；发布时 amd64 和 arm64 都必须通过。`ci
 > **已实测**：公开仓库推的 GHCR 包默认可匿名拉取，不需要手动改 visibility。
 > 匿名请求 `ghcr.io/v2/lolkda/dsh-dev-image/manifests/latest` 返回 200。
 >
-> arm64 走 QEMU，发布现在还会运行 ARM 版启动与工具链验收，因此耗时高于仅构建。单个平台上限 90 分钟；需要进一步提速时可改用原生 ARM runner。
+> 两个平台在独立原生 runner 上并行构建与验收：amd64 使用 `ubuntu-latest`，arm64 使用 `ubuntu-24.04-arm`，不再通过 QEMU 模拟运行。缓存仍按架构隔离，完整启动、工具链和 Web 验收全部保留；单个平台上限仍为 90 分钟。
 >
 > 镜像不小：amd64 压缩后约 1.4 GB，arm64 约 1.3 GB。大头是 gradle（解压后约 200MB）、
 > Go 工具链、JDK，以及 apt 那一层。想瘦身就删 gradle 或 gdb。

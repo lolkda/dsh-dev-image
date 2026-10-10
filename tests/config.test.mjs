@@ -194,10 +194,44 @@ test('Docker builds configure a registry mirror without weakening candidate vali
   }
 });
 
+const buildWorkflow = read('.github/workflows/build.yml');
+const buildJob = buildWorkflow.match(/^  build:\n([\s\S]*?)(?=^  publish:)/m)?.[1] ?? '';
+
+for (const [arch, expectedRunner] of [['amd64', 'ubuntu-latest'], ['arm64', 'ubuntu-24.04-arm']]) {
+  test(`CI selects a native runner for ${arch}`, () => {
+    // 只解析当前 workflow 使用的条件表达式；这是配置契约，不模拟 GitHub 调度。
+    const selector = buildJob.match(/^    runs-on: \$\{\{ matrix\.arch == '([^']+)' && '([^']+)' \|\| '([^']+)' \}\}$/m);
+    assert.ok(selector, 'Missing architecture-based runner selection');
+    const [, selectedArch, matchingRunner, fallbackRunner] = selector;
+    assert.equal(arch === selectedArch ? matchingRunner : fallbackRunner, expectedRunner);
+  });
+}
+
+test('native image jobs need no QEMU and preserve platform-specific caches', () => {
+  assert.doesNotMatch(buildJob, /setup-qemu-action/);
+  assert.match(buildJob, /^          platforms: linux\/\$\{\{ matrix\.arch \}\}$/m);
+  assert.match(buildJob, /^          cache-from: type=gha,scope=image-\$\{\{ matrix\.arch \}\}$/m);
+  assert.match(buildJob, /^          cache-to: type=gha,scope=image-\$\{\{ matrix\.arch \}\},mode=max$/m);
+  assert.match(buildJob, /^      fail-fast: false$/m);
+});
+
+test('CI keeps amd64-only PRs and both release architectures', () => {
+  const matrix = buildJob.match(/^        arch: \$\{\{ github\.event_name == 'pull_request' && fromJSON\('([^']+)'\) \|\| fromJSON\('([^']+)'\) \}\}$/m);
+  assert.ok(matrix, 'Missing PR/release architecture selection');
+  assert.deepEqual(JSON.parse(matrix[1]), ['amd64']);
+  assert.deepEqual(JSON.parse(matrix[2]), ['amd64', 'arm64']);
+});
+
 test('publication depends on tests of the loaded candidate and immutable digests', () => {
   const source = read('.github/workflows/build.yml');
   assert.match(source, /load:\s*true/);
-  assert.match(source, /tests\/image-smoke\.sh/);
+  const permissions = buildJob.indexOf('run: bash tests/container-runtime.sh dsh-dev-image:ci');
+  const toolchains = buildJob.indexOf('run: bash tests/image-smoke.sh dsh-dev-image:ci');
+  const push = buildJob.indexOf('docker push "$ref"');
+  assert.ok(permissions >= 0 && toolchains > permissions && push > toolchains,
+    'Both candidate validation steps must precede pushing the tested image');
   assert.match(source, /\n  publish:\n\s+needs: build/);
+  assert.match(source, /test -s "\$DIGEST_DIR\/amd64\.txt"/);
+  assert.match(source, /test -s "\$DIGEST_DIR\/arm64\.txt"/);
   assert.match(source, /imagetools create/);
 });

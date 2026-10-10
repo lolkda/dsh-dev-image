@@ -26,3 +26,5 @@ CI 在不改变 Dockerfile 官方镜像引用的情况下优先尝试缓存源�
 ## Related notes audit
 
 检索 Docker Hub、mirror、BuildKit、构建、发布：工具安装笔记只涉及工具来源；root-only 和默认 capabilities 笔记约束运行身份和发布验收。本决定不取代它们，保持全部验收条件，无现有缓存源决策。
+
+[原生 ARM runner](2026-10-10-native-arm-runner.md)仅调整 arm64 的执行主机，保留本篇的 BuildKit 引导镜像与缓存源配置，两项决定并存。
