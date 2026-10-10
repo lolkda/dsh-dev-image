@@ -23,11 +23,32 @@ Status: implemented
 
 - [配置回归](../../../../tests/config.test.mjs)分别检查两个架构的 runner 选择、无 QEMU、PR/release 架构选择、目标平台和缓存隔离；发布检查要求权限与工具链验收在推送之前、publish 依赖 build 且读取两个 digest。
 - 修改 workflow 前，新增检查中 runner 选择两项与无 QEMU 一项按预期失败；修改后全量 `node --test tests/*.test.mjs` 为 150 通过、0 失败、2 跳过。跳过项为未设置 `FRIDA_TEST_BIN` 的真实 Frida CLI 测试，以及当前 root 环境不适用的非 root 入口测试。
-- 本地未安装 actionlint，未执行该校验。配置回归不模拟 GitHub 调度，也不替代新配置的原生 ARM 构建与容器验收；实际耗时和 action 兼容性仍需下一次 CI 确认。
+- 本地未安装 actionlint，未执行该校验。提交前配置回归 48 项通过、笔记校验 8 项通过，`git diff --check` 通过；配置回归本身不模拟 GitHub 调度。
+- 提交 `898ef1782ccca7985f32f88aa37f406c770e6b99` 的 [CI 38050015269](https://github.com/lolkda/dsh-dev-image/actions/runs/38050015269) 已通过前置检查、双架构完整构建/容器验收和 manifest 发布。ARM job `114207315522` 的 Docker 信息显示 `Architecture: aarch64`，runner 为 `ubuntu-24.04-arm`，实际 Web 验收输出 `FULL IMAGE AND AUTHENTICATED WEB STARTUP PASSED`。
+
+## Measurement
+
+比较同一镜像定义和真实验收脚本：基线为父提交 `d745f9c446fd9f867b67159ed2661805a8251181` 的 [QEMU CI 38047200183](https://github.com/lolkda/dsh-dev-image/actions/runs/38047200183)，新构建为上述原生 ARM CI。`git diff` 确认镜像定义、入口、补丁、工具链/权限/用户 CLI 验收脚本及前置工作流均无变化。两次 ARM 构建日志各有 31 个 `CACHED` 步骤，属于热缓存对比，不是冷构建基准。
+
+| 阶段 | QEMU 基线 | 原生 ARM |
+| --- | --- | --- |
+| ARM 构建并加载 | 61 秒 | 58 秒 |
+| ARM 容器权限验收 | 53 秒 | 6 秒 |
+| ARM 工具链/Web 验收 | 732 秒 | 43 秒 |
+| ARM 镜像推送 | 51 秒 | 41 秒 |
+| ARM 整个 job | 920 秒 | 164 秒 |
+| amd64 整个 job | 197 秒 | 180 秒 |
+| 整个发布流水线 | 1027 秒 | 288 秒 |
+
+ARM job 耗时减少 82.2%，工具链/Web 验收减少 94.1%，整个流水线减少 72.0%。amd64 未观察到整体变慢；其小幅差异不能归因于 ARM runner。收益主要来自移除运行时验收的模拟执行开销，而非构建缓存优化。
+
+耗时从 GitHub REST API 的 job/step `started_at`、`completed_at` 计算；流水线从 `run_started_at` 到 publish job 的 `completed_at`，不使用可能受后续事件影响的 `updated_at`。复核入口为 `gh api repos/lolkda/dsh-dev-image/actions/runs/<run_id>/jobs`；ARM 基线 job 为 `114199233350`，原生 job 为 `114207315522`，用 `gh run view <run_id> --job <job_id> --log` 核对缓存和架构。
+
+publish job `114207813076` 将两种架构合并为 `sha256:aba282a311fe8bd1dd3e8174bbe6ec84a206cf52c7b0d8329299faaf8ae92d20`，更新 `ghcr.io/lolkda/dsh-dev-image:main` 和 `:latest`。仅补充测速证据的文档提交使用 `[skip ci]`，避免再触发相同镜像构建；被验收的镜像 revision 仍为 `898ef17`。
 
 ## Consequences
 
-原生 runner 避免 ARM 构建和测试命令的 QEMU 模拟开销，不改变 amd64 的执行资源和镜像内容。首次原生 ARM 运行仍需验证各 action 与 BuildKit 镜像在该 runner 上可用；排队和网络波动仍可能影响总耗时。本次不承诺固定加速倍数，不降低测试门槛；本地修改在提交并推送后才影响后续工作流。
+原生 runner 避免 ARM 构建和测试命令的 QEMU 模拟开销，不改变 amd64 的执行资源和镜像内容。本次 CI 已验证 action、BuildKit、完整容器验收与发布在原生 ARM 上可用，无需削减测试。上述数字仅代表一次热缓存对比；排队、网络、缓存失效和依赖源变化仍可能影响后续耗时，不承诺固定加速倍数。
 
 ## Related notes audit
 
