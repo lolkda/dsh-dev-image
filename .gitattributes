@@ -8,6 +8,8 @@ Dockerfile  text eol=lf
 *.yml       text eol=lf
 *.yaml      text eol=lf
 *.md        text eol=lf
+# Unified diff context adds a space before upstream tabs; keep other checks enabled.
+*.patch     whitespace=-space-before-tab
 
 # 二进制资源不做行尾处理
 *.png binary

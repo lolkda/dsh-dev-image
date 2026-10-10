@@ -28,6 +28,8 @@ jobs:
           sudo env PATH="$PATH" bash tests/entrypoint.test.sh
           sudo env PATH="$PATH" node --test tests/*.test.mjs
           npm run verify-notes
+      - name: Real Team preset creation and cold resume on patched DSH
+        run: bash tests/subagent-runtime.sh
       - name: Validate both Compose adapters
         run: |
           docker compose -f compose.yml config --quiet
