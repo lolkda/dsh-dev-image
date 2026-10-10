@@ -54,6 +54,8 @@ publish job `114207813076` 将两种架构合并为 `sha256:aba282a311fe8bd1dd3e
 
 检索活跃笔记中的 QEMU、runner、arm64、构建和发布：[镜像缓存源](2026-10-10-ci-docker-hub-mirror.md)与本决定部分重叠，缓存源配置保持不变并互链；[root-only](../simplification/2026-10-04-root-only-runtime.md)和[默认 capabilities](../simplification/2026-10-04-docker-default-capabilities.md)的运行与验收约束保持不变，无需取代。Apktool、Frida 和 child-setup 笔记仅涉及镜像功能，与 runner 选择无关。无旧 ARM runner 决定需要归档。
 
+当前发布目标由[仅向 Docker Hub 发布](2026-10-11-docker-hub-only-publication.md)调整；本篇 runner 和验收决定仍成立，上述 GHCR digest 与耗时保留为历史实测证据。
+
 ## References
 
 [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)列出公开仓库的标准 `ubuntu-24.04-arm` runner；该选择不要求自建 ARM 机器。

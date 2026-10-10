@@ -11,7 +11,7 @@ services:
       context: .
       dockerfile: Dockerfile
       # 工具链版本只在 Dockerfile ARG 中定义，定制用 --build-arg。
-    image: ghcr.io/lolkda/dsh-dev-image:latest
+    image: lolkda/dsh-dev-image:latest
     user: "0:0"
     init: true
     command: ["dsh", "web"]

@@ -90,7 +90,7 @@ Maven 仓库和 Gradle 缓存分别落在 `/app/.cache/m2/repository` 与 `/app/
 mkdir -p /srv/agent
 docker run -d --name dsh-agent --restart unless-stopped --network host \
   -v /srv/agent:/app \
-  ghcr.io/lolkda/dsh-dev-image:latest
+  lolkda/dsh-dev-image:latest
 ```
 
 然后浏览器开 `http://<宿主机IP>:3080`。
@@ -194,7 +194,7 @@ docker compose up -d --force-recreate
 支持 `linux/amd64` 和 `linux/arm64`。
 
 ```bash
-docker pull ghcr.io/lolkda/dsh-dev-image:latest
+docker pull lolkda/dsh-dev-image:latest
 ```
 
 | 标签 | 触发条件 |
@@ -213,9 +213,13 @@ PR 只测试 amd64、不推送；发布时 amd64 和 arm64 都必须通过。`ci
 
 **版本号只写在 Dockerfile 的 ARG 默认值里**，CI 不重复声明 —— 改版本改那一行就够了。
 
-> **已实测**：公开仓库推的 GHCR 包默认可匿名拉取，不需要手动改 visibility。
-> 匿名请求 `ghcr.io/v2/lolkda/dsh-dev-image/manifests/latest` 返回 200。
->
+镜像仅发布到 [Docker Hub](https://hub.docker.com/r/lolkda/dsh-dev-image)，不再向 GitHub Packages 发布。首次发布前，在 Docker Hub 创建公开仓库 `lolkda/dsh-dev-image`，并在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 配置：
+
+- `DOCKERHUB_USERNAME`：具有目标仓库写权限的 Docker Hub 登录用户名。
+- `DOCKERHUB_TOKEN`：具有目标仓库写权限的 Access Token，不把 token 写入源码。
+
+非 PR 发布缺少任一 secret 会在前置配置检查中失败；PR 不需要这些凭据。非空检查不证明 token 有效，登录、双架构推送和匿名拉取需实际发布验证。切换期间旧镜像包保留，只有 Docker Hub 首次发布成功且公开双架构镜像可拉取后才删除旧包；删除后旧 registry 地址将失效。
+
 > 两个平台在独立原生 runner 上并行构建与验收：amd64 使用 `ubuntu-latest`，arm64 使用 `ubuntu-24.04-arm`，不再通过 QEMU 模拟运行。缓存仍按架构隔离，完整启动、工具链和 Web 验收全部保留；单个平台上限仍为 90 分钟。
 >
 > 镜像不小：amd64 压缩后约 1.4 GB，arm64 约 1.3 GB。大头是 gradle（解压后约 200MB）、
@@ -230,7 +234,7 @@ docker compose exec agent bash
 冒烟测试：
 
 ```bash
-docker run --rm -e DSH_PLUGINS= ghcr.io/lolkda/dsh-dev-image:latest bash -lc \
+docker run --rm -e DSH_PLUGINS= lolkda/dsh-dev-image:latest bash -lc \
   'python -V && node -v && pnpm -v && tsc --version && tsx --version && go version && rustc -V && java -version && git --version && adb version >/dev/null && dsh --help >/dev/null && echo ALL-OK'
 ```
 

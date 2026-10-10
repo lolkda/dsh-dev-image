@@ -20,7 +20,7 @@ Docker Hub 登录可提高配额且继续直接使用原源，但需要用户提
 
 ## Consequences
 
-CI 在不改变 Dockerfile 官方镜像引用的情况下优先尝试缓存源，缓存源不可用时仍由原 Docker Hub 解析。仓库不需要新增 Docker Hub 凭据。缓存源可用性和覆盖率依赖外部服务，若未命中仍可能遭原源限流。
+CI 在不改变 Dockerfile 官方镜像引用的情况下优先尝试缓存源，缓存源不可用时仍由原 Docker Hub 解析。依赖镜像缓存源本身不需要 Docker Hub 凭据；[仅向 Docker Hub 发布](2026-10-11-docker-hub-only-publication.md)另行要求发布账号与 token，不改变本篇拉取缓存决定。缓存源可用性和覆盖率依赖外部服务，若未命中仍可能遭原源限流。
 
 
 ## Related notes audit

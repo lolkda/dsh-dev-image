@@ -13,11 +13,30 @@ permissions:
   contents: read
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  REGISTRY: docker.io
+  IMAGE_NAME: lolkda/dsh-dev-image
 
 jobs:
+  publication-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validate Docker Hub credentials
+        if: github.event_name != 'pull_request'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for key in DOCKERHUB_USERNAME DOCKERHUB_TOKEN; do
+            if [[ -z "${!key}" ]]; then
+              printf '::error::Missing Actions secret: %s\n' "$key" >&2
+              exit 1
+            fi
+          done
+
   checks:
+    needs: publication-config
     uses: ./.github/workflows/verify-layout.yml
 
   build:
@@ -26,7 +45,6 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -69,13 +87,13 @@ jobs:
         run: bash tests/container-runtime.sh dsh-dev-image:ci
       - name: Validate toolchains and temporary Web login
         run: bash tests/image-smoke.sh dsh-dev-image:ci
-      - name: Log in to GHCR
+      - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Push the tested image without rebuilding
         if: github.event_name != 'pull_request'
         env:
@@ -87,8 +105,15 @@ jobs:
           docker tag dsh-dev-image:ci "$ref"
           docker push "$ref"
           mkdir -p "$RUNNER_TEMP/digests"
-          docker image inspect "$ref" --format '{{index .RepoDigests 0}}' > "$RUNNER_TEMP/digests/$ARCH.txt"
-          grep -Eq '^ghcr.io/.+@sha256:[a-f0-9]{64}$' "$RUNNER_TEMP/digests/$ARCH.txt"
+          repo_digest="$(docker image inspect "$ref" --format '{{index .RepoDigests 0}}')"
+          case "$repo_digest" in
+            "$image"@*) digest="${repo_digest#"$image"@}" ;;
+            "${IMAGE_NAME,,}"@*) digest="${repo_digest#"${IMAGE_NAME,,}"@}" ;;
+            *) printf 'Unexpected image repository in pushed digest\n' >&2; exit 1 ;;
+          esac
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] \
+            || { printf 'Invalid pushed image digest\n' >&2; exit 1; }
+          printf '%s@%s\n' "$image" "$digest" > "$RUNNER_TEMP/digests/$ARCH.txt"
       - name: Export verified digest
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
@@ -105,7 +130,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: docker/setup-buildx-action@v3
         with:
@@ -117,8 +141,8 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
           pattern: image-digest-*
