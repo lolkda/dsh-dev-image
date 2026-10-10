@@ -14,7 +14,6 @@ permissions:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: lolkda/dsh-dev-image
 
 jobs:
   publication-config:
@@ -41,6 +40,9 @@ jobs:
 
   build:
     needs: checks
+    env:
+      # 发布时由 Repository secret 决定命名空间；PR 无 secret 时只用于元数据且不推送。
+      IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME || github.repository_owner }}/dsh-dev-image
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     timeout-minutes: 90
     permissions:
@@ -126,6 +128,8 @@ jobs:
   publish:
     needs: build
     if: github.event_name != 'pull_request'
+    env:
+      IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/dsh-dev-image
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

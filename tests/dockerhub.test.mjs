@@ -33,12 +33,13 @@ function run(script, env) {
 
 test('only Docker Hub is used for publishing and deployment', () => {
   assert.match(workflow, /^  REGISTRY: docker\.io$/m);
-  assert.match(workflow, /^  IMAGE_NAME: lolkda\/dsh-dev-image$/m);
+  assert.match(workflow, /IMAGE_NAME: \$\{\{ secrets\.DOCKERHUB_USERNAME \|\| github\.repository_owner \}\}\/dsh-dev-image/);
+  assert.match(workflow, /image="\$\{REGISTRY\}\/\$\{IMAGE_NAME,,\}"/);
   assert.doesNotMatch(workflow, /ghcr|GITHUB_TOKEN|packages:\s*write/i);
   assert.equal([...workflow.matchAll(/username: \$\{\{ secrets\.DOCKERHUB_USERNAME \}\}/g)].length, 2);
   assert.equal([...workflow.matchAll(/password: \$\{\{ secrets\.DOCKERHUB_TOKEN \}\}/g)].length, 2);
   for (const path of ['compose.yml', 'compose.bridge.yml']) {
-    assert.match(read(path), /^    image: lolkda\/dsh-dev-image:latest$/m);
+    assert.match(read(path), /^    image: chikennice\/dsh-dev-image:latest$/m);
   }
   for (const path of ['README.md', 'compose.yml', 'compose.bridge.yml']) {
     assert.doesNotMatch(read(path), /ghcr\.io/i);
@@ -67,13 +68,13 @@ for (const [username, token, succeeds] of [['', '', false], ['fixture', '', fals
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const fixtures = [
-  [`lolkda/dsh-dev-image@${digest}`, true],
-  [`docker.io/lolkda/dsh-dev-image@${digest}`, true],
+  [`chikennice/dsh-dev-image@${digest}`, true],
+  [`docker.io/chikennice/dsh-dev-image@${digest}`, true],
   [`other/dsh-dev-image@${digest}`, false],
   [`docker.io/other/dsh-dev-image@${digest}`, false],
-  [`registry.example/lolkda/dsh-dev-image@${digest}`, false],
-  [`lolkda/dsh-dev-image@sha256:${'a'.repeat(63)}`, false],
-  ['lolkda/dsh-dev-image@sha256:INVALID', false],
+  [`registry.example/chikennice/dsh-dev-image@${digest}`, false],
+  [`chikennice/dsh-dev-image@sha256:${'a'.repeat(63)}`, false],
+  ['chikennice/dsh-dev-image@sha256:INVALID', false],
   ['', false],
 ];
 for (const [repoDigest, succeeds] of fixtures) {
@@ -94,20 +95,20 @@ esac
     const log = join(temp, 'docker.log');
     const result = run(stepScript('Push the tested image without rebuilding'), {
       PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: temp,
-      REGISTRY: 'docker.io', IMAGE_NAME: 'lolkda/dsh-dev-image',
+      REGISTRY: 'docker.io', IMAGE_NAME: 'chikennice/dsh-dev-image',
       GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', ARCH: 'arm64',
       DOCKER_FIXTURE_LOG: log, DOCKER_FIXTURE_DIGEST: repoDigest,
     });
     assert.equal(result.status === 0, succeeds, result.stderr);
     const artifact = join(temp, 'digests', 'arm64.txt');
     if (succeeds) {
-      assert.equal(readFileSync(artifact, 'utf8'), `docker.io/lolkda/dsh-dev-image@${digest}\n`);
+      assert.equal(readFileSync(artifact, 'utf8'), `docker.io/chikennice/dsh-dev-image@${digest}\n`);
     } else {
       assert.equal(existsSync(artifact), false);
       assert.match(result.stderr, /Unexpected image repository|Invalid pushed image digest/);
     }
     const calls = readFileSync(log, 'utf8').trim().split('\n');
-    const ref = 'docker.io/lolkda/dsh-dev-image:ci-123-1-arm64';
+    const ref = 'docker.io/chikennice/dsh-dev-image:ci-123-1-arm64';
     assert.deepEqual(calls, [
       `tag dsh-dev-image:ci ${ref}`, `push ${ref}`,
       `image inspect ${ref} --format {{index .RepoDigests 0}}`,

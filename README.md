@@ -90,7 +90,7 @@ Maven 仓库和 Gradle 缓存分别落在 `/app/.cache/m2/repository` 与 `/app/
 mkdir -p /srv/agent
 docker run -d --name dsh-agent --restart unless-stopped --network host \
   -v /srv/agent:/app \
-  lolkda/dsh-dev-image:latest
+  chikennice/dsh-dev-image:latest
 ```
 
 然后浏览器开 `http://<宿主机IP>:3080`。
@@ -194,7 +194,7 @@ docker compose up -d --force-recreate
 支持 `linux/amd64` 和 `linux/arm64`。
 
 ```bash
-docker pull lolkda/dsh-dev-image:latest
+docker pull chikennice/dsh-dev-image:latest
 ```
 
 | 标签 | 触发条件 |
@@ -213,7 +213,7 @@ PR 只测试 amd64、不推送；发布时 amd64 和 arm64 都必须通过。`ci
 
 **版本号只写在 Dockerfile 的 ARG 默认值里**，CI 不重复声明 —— 改版本改那一行就够了。
 
-镜像仅发布到 [Docker Hub](https://hub.docker.com/r/lolkda/dsh-dev-image)，不再向 GitHub Packages 发布。首次发布前，在 Docker Hub 创建公开仓库 `lolkda/dsh-dev-image`，并在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 配置：
+镜像仅发布到 [Docker Hub](https://hub.docker.com/r/chikennice/dsh-dev-image)，不再向 GitHub Packages 发布。首次发布前，在 Docker Hub 创建公开仓库 `chikennice/dsh-dev-image`，并在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 配置：
 
 - `DOCKERHUB_USERNAME`：具有目标仓库写权限的 Docker Hub 登录用户名。
 - `DOCKERHUB_TOKEN`：具有目标仓库写权限的 Access Token，不把 token 写入源码。
@@ -234,7 +234,7 @@ docker compose exec agent bash
 冒烟测试：
 
 ```bash
-docker run --rm -e DSH_PLUGINS= lolkda/dsh-dev-image:latest bash -lc \
+docker run --rm -e DSH_PLUGINS= chikennice/dsh-dev-image:latest bash -lc \
   'python -V && node -v && pnpm -v && tsc --version && tsx --version && go version && rustc -V && java -version && git --version && adb version >/dev/null && dsh --help >/dev/null && echo ALL-OK'
 ```
 

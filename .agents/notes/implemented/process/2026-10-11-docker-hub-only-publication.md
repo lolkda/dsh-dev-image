@@ -4,11 +4,11 @@ Status: implemented
 
 ## Problem
 
-用户选择将公开镜像发布目标从 GHCR 切换到 Docker Hub，目标仓库为 `lolkda/dsh-dev-image`。需要同步发布认证、镜像地址、digest 校验和部署文档，不能只替换 registry 字符串。初始检查时仓库没有 Docker Hub Actions secrets；用户随后配置两项凭据并授权直接提交、推送和执行首次发布。本地改动不能视为实际发布成功。
+用户选择将公开镜像发布目标从 GHCR 切换到 Docker Hub，目标仓库为 `chikennice/dsh-dev-image`。需要同步发布认证、镜像地址、digest 校验和部署文档，不能只替换 registry 字符串。初始检查时仓库没有 Docker Hub Actions secrets；用户随后配置两项凭据并授权直接提交、推送和执行首次发布。本地改动不能视为实际发布成功。
 
 ## Decision
 
-- [发布工作流](../../../../.github/workflows/build.yml)仅发布到 `docker.io/lolkda/dsh-dev-image`，两份 Compose 和 README 的部署默认地址为 `lolkda/dsh-dev-image:latest`；移除 GHCR 登录、GITHUB_TOKEN 发布认证和 packages 写权限。
+- [发布工作流](../../../../.github/workflows/build.yml)仅发布到 `docker.io/${DOCKERHUB_USERNAME}/dsh-dev-image`；workflow 用 `DOCKERHUB_USERNAME` 动态生成命名空间，PR 无 secret 时回退到 GitHub owner 仅用于不推送的元数据。两份 Compose 和 README 的部署默认地址为 `chikennice/dsh-dev-image:latest`；移除 GHCR 登录、GITHUB_TOKEN 发布认证和 packages 写权限。
 - 使用 `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN` secrets；非 PR 先检查两项非空，再运行前置检查和构建。PR 不需要凭据，仍只测试 amd64、不推送。
 - 原生双架构 runner、按架构缓存、候选镜像完整权限/工具链/Web 验收，以及推送已测镜像后合并两个 digest 的发布门槛保持不变。标签规则不变。
 - Docker 本地 RepoDigests 可能省略 `docker.io/`，只接受目标仓库的合法 SHA-256 digest；导出统一为带 registry 的引用，不接受其他仓库或 malformed digest。
@@ -25,7 +25,7 @@ Status: implemented
 
 [Docker Hub 回归](../../../../tests/dockerhub.test.mjs)实际执行从 workflow 提取的 shell：四种凭据组合验证缺失即失败且不输出 token；隔离 Docker 替身验证有/无 registry 的目标 digest 被规范化，错误仓库、错误 registry、无效或缺失 digest 被拒绝，且只 tag/push 已测镜像，不重建。静态配置契约验证 PR 跳过凭据/发布、配置检查在构建前、两处认证均使用 Docker Hub secrets、部署无 GHCR 地址。原生 runner 与原有发布门槛回归保持不变。
 
-针对性 Docker Hub 和配置测试 62 项通过；全量 Node 回归 137 通过、0 失败、2 项既有环境条件跳过。Shell 文件及 workflow shell block 的 Bash 语法和 ShellCheck 通过，笔记校验 10 项通过，差异检查通过。API 仅核对 secret 名称，确认 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 已配置；实际 Docker Hub 登录、镜像推送和匿名双架构拉取仍需本次 CI 验证，不能用本地替身测试宣称公开镜像已发布。
+针对性 Docker Hub 和配置测试 62 项通过；全量 Node 回归 137 通过、0 失败、2 项既有环境条件跳过。Shell 文件及 workflow shell block 的 Bash 语法和 ShellCheck 通过，笔记校验 10 项通过，差异检查通过。API 仅核对 secret 名称，确认 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 已配置；提交 `b894489` 的 [CI 38072251759](https://github.com/lolkda/dsh-dev-image/actions/runs/38072251759) 通过配置检查、前置真实权限检查和双架构完整构建/工具链/Web 验收。首次配置曾误用 GitHub owner `lolkda` 作为 Docker Hub 命名空间；两处 Docker Hub 登录均成功，但推送 `docker.io/lolkda/dsh-dev-image:ci-...` 返回 `denied: requested access to the resource is denied`，publish 被跳过。用户随后确认真实 Docker Hub 用户名为 `chikennice`，workflow 已改为从 `DOCKERHUB_USERNAME` 动态生成命名空间，Compose/README 默认地址同步为 `chikennice/dsh-dev-image`；新配置尚未提交和运行 CI。旧 GHCR 包保留；当前 GitHub 凭据访问目标 Packages 元数据返回 403，浏览器管理通道不可用，后续删除亦需要有效的包管理授权。
 
 ## Consequences
 
