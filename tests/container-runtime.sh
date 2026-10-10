@@ -173,6 +173,4 @@ for missing in dac fowner; do
     if grep -q UNEXPECTED_COMMAND "$scratch/missing-$missing.log"; then exit 1; fi
 done
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-bash "$root/tests/home-migration-runtime.sh" "$image"
 printf '\n=== ALL ROOT-ONLY RUNTIME CONTRACTS PASSED ===\n'

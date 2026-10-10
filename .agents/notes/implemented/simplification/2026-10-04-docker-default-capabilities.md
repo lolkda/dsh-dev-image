@@ -11,7 +11,7 @@ root-only 消除了账户切换，但初版 Compose 仍先 cap_drop ALL 再逐�
 - 两份 Compose 不设置 cap_drop，不重复添加 CHOWN/DAC_OVERRIDE/FOWNER；cap_add 只包含 SYS_PTRACE。能力默认集合由 Docker 提供，不在项目中复制或硬编码完整列表。
 - root 0:0、no-new-privileges、资源/日志限制、网络方式及 /app 数据布局保持不变；不开放 privileged，不挂载 Docker socket，不重启当前容器。
 - 正常容器验收与默认部署对齐。用例检查 root、旧 UID 文件读写、HOME/CLI 持久化、手动 chown 和 setpriv 到 1000:1000 的行为；最后一项只在测试子进程中证明默认 SETUID/SETGID 可用，不恢复入口降权。
-- 缺少 DAC_OVERRIDE/FOWNER 的负向测试仍显式缩减能力，不因部署默认值变化而删除失败用例。显式 HOME 导出 helper 的独立只读/最小能力限制不属于日常服务，保持不变。
+- 缺少 DAC_OVERRIDE/FOWNER 的负向测试仍显式缩减能力，不因部署默认值变化而删除失败用例。旧版显式 HOME 导出 helper 的独立只读/最小能力限制原本不属于日常服务；该 helper 已由[移除旧 HOME 迁移工具](2026-10-10-remove-home-migration-tools.md)删除，不影响日常容器的能力配置。
 - 发布通过当前 GitHub 工作流进行。本会话中启动、被新配置取代的旧运行收到取消请求，避免它在新版本之后更新公共标签。
 
 ## Historical audit

@@ -535,33 +535,7 @@ root 的 `HOME` 和 Linux 账户家目录现在都是 `/app/.home`，不再创�
 - 系统 Git 默认忽略 `/.home/` 和 `/.home-import.*/`，仓库也排除了这些目录。自定义 `core.excludesFile` 可能覆盖系统默认值；不要强制把 HOME 或导出的凭据提交到 Git。
 - 这不保存 `ssh-agent` 解锁状态、`git credential-cache` 的内存数据，也不能恢复已过期/撤销的 token。`/usr/local` 的额外全局安装仍不属于 HOME 持久化范围。
 
-### 仅旧 HOME 尚未持久化时，先导出旧容器层
-
-**已有 `/app/.home` 时跳过本节，直接使用原挂载。新镜像无法自动找回已经删除的旧容器层。** 如果旧容器还在，应在首次启动新版之前，在 Linux Docker 宿主机执行 [迁移脚本](scripts/migrate-home.sh)。脚本只复制显式指定的旧 HOME，不预设源路径，不会打印 token、私钥或配置内容，不会删除源容器。
-
-以下假设已把新版仓库放到部署机，宿主机已安装 Docker、`curl` 和 `jq`，挂载目录为 `/home/docker/agent`（其他目录请替换）。若只复制脚本，需将[迁移脚本](scripts/migrate-home.sh)和[路径检查器](scripts/verify-home-path.sh)放在同一目录：
-
-```bash
-docker pull ghcr.io/lolkda/dsh-dev-image:latest
-# 仅针对仍有 agent 用户的旧镜像：停止前读取源 HOME；核对它与旧进程路径一致。
-source_home="$(docker exec --user agent dsh-agent sh -c 'printf "%s" "$HOME"')"
-docker stop dsh-agent
-sudo bash scripts/migrate-home.sh dsh-agent /home/docker/agent "$source_home"
-
-# 只有迁移成功后才继续；保留旧容器便于回看配置
-docker rename dsh-agent "dsh-agent-old-$(date +%Y%m%d-%H%M%S)"
-docker run -d --name dsh-agent --user 0:0 --restart unless-stopped --network host \
-  -v /home/docker/agent:/app \
-  ghcr.io/lolkda/dsh-dev-image:latest dsh web --no-open
-```
-
-第三个参数 `SOURCE_HOME` 必须明确提供：它是旧容器内非根目录的规范绝对路径，不能包含控制字符、重复分隔符、`.` / `..` 路径段或末尾斜杠；省略时脚本直接报错，不猜测源目录。导出副本固定准备为 root `0:0`，不再接受 `AGENT_UID/AGENT_GID`。脚本仅支持在实际 Docker 宿主机、通过本机 Unix socket 迁移未挂载的旧容器层 HOME；源 HOME 的挂载、源目录及其父目录链接、privileged/SYS_ADMIN 容器和 Docker 内部数据路径会被拒绝，避免源/目标重叠及递归自复制。
-
-路径检查器使用 Docker 的 `HEAD /containers/{id}/archive` 接口，按 [PathStat 字段约定](https://raw.githubusercontent.com/moby/moby/v28.3.1/api/types/container/container.go)逐级确认实际目录；它只读取元数据，不启动源容器，不复制父目录内容，读取失败时停止迁移。
-
-迁移先导出到源挂载范围之外的私有临时目录，再放入目标文件系统暂存；需要较大临时空间时可显式指定 `TMPDIR`，但它不能位于源容器挂载范围内。使用旧镜像作为无网络、只读根文件系统的权限修复工具时，只挂载导出副本，不挂载工程目录，并仅授予 `CHOWN`、`DAC_READ_SEARCH`。最终由宿主 root 原子发布 `0:0`、`0700` 的目标目录；源容器和工程文件不改属主。这是操作者显式执行的一次性导出，不是常规启动时递归归权。
-
-**目标 `.home` 已存在时，脚本会拒绝覆盖。** 不要直接删除它：先备份并决定如何合并。迁移失败时源容器不受影响，暂存目录会保留并打印位置；可先重新启动旧容器。若旧容器早已删除，只能重新登录一次，之后的磁盘状态才会由新布局保留。之后的常规镜像升级无需再次迁移。
+**已有 `/app/.home` 时直接复用原挂载，不要为升级删除它。** 仓库不再提供旧容器层 HOME 的专用迁移脚本；尚未持久化的数据需要在删除旧容器前自行备份，新镜像无法自动找回已经删除的容器层。
 
 日常登录工具与 DSH 一样使用 root，不需要 sudo：
 
@@ -651,13 +625,13 @@ dist-tag 会变化，且不保证指向所需的预发布版本。镜像通过 `
 ```bash
 node --test tests/*.test.mjs
 npm run verify-notes
-for script in entrypoint.sh cli-env.sh scripts/*.sh tests/*.sh; do bash -n "$script"; done
-shellcheck entrypoint.sh cli-env.sh scripts/*.sh tests/*.sh
+for script in entrypoint.sh cli-env.sh tests/*.sh; do bash -n "$script"; done
+shellcheck entrypoint.sh cli-env.sh tests/*.sh
 sh -n cli-env.sh
 node --check home-init.mjs
 ```
 
-Linux 测试机上补跑 `sudo env PATH="$PATH" bash tests/entrypoint.test.sh` 和 `sudo env PATH="$PATH" node --test tests/*.test.mjs`；只操作隔离 fixture，不应对真实工作区运行入口。[CLI 回归测试](tests/entrypoint.test.sh) 实际执行 root 入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置测试可在 Git Bash 运行，root-only 入口验收需要 Linux。[HOME 路径回归](tests/home-path.test.mjs) 在 Linux 上使用真实 Unix socket HTTP 测试服务验证元数据协议与父目录链接拒绝，需要 `curl` 和 `jq`，不需要 Docker。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
+Linux 测试机上补跑 `sudo env PATH="$PATH" bash tests/entrypoint.test.sh` 和 `sudo env PATH="$PATH" node --test tests/*.test.mjs`；只操作隔离 fixture，不应对真实工作区运行入口。[CLI 回归测试](tests/entrypoint.test.sh) 实际执行 root 入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置测试可在 Git Bash 运行，root-only 入口验收需要 Linux。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
 
 Linux + Docker 下的快速权限验收：
 
