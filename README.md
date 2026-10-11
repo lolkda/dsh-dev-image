@@ -37,7 +37,7 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 | 构建 | `cmake` `ninja` `autoconf` `automake` `libtool` | C / C++ 项目 |
 | 调试 | `gdb` `strace` | 需要 `cap_add: SYS_PTRACE`，compose 里已配好 |
 | Android 调试 | `adb` | 设备调试 CLI，来自 Debian 归档包而非完整 SDK；[用法与边界见下](#adbandroid-调试桥) |
-| APK 分析 | `apktool` 3.0.3 | 官方 JAR + SHA-256 校验，复用镜像 Java；支持任意目录直接调用 |
+| APK 分析 | `apktool` 2.12.1 | 官方 JAR + SHA-256 校验，复用镜像 Java；支持任意目录直接调用 |
 | 动态插桩 | `frida` 17.23.1 / `frida-tools` 14.11.0 | 独立 Python 环境，系统 PATH 提供 `frida`、`frida-ps`、`frida-trace` 等 CLI |
 | 版本控制 | `git` `git-lfs` `gh` | |
 | 其他 | `shellcheck` `bc` `rsync` `zip` / `unzip` | |

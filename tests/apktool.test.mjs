@@ -10,7 +10,7 @@ const dockerfile = read('Dockerfile');
 
 test('apktool installation pins and verifies the official JAR in the final image', () => {
   const stage = dockerfile.split(/^FROM /m).at(-1);
-  assert.match(stage, /ARG APKTOOL_VERSION=3\.0\.3/);
+  assert.match(stage, /ARG APKTOOL_VERSION=2\.12\.1/);
   assert.match(stage, /ARG APKTOOL_SHA256=[a-f0-9]{64}\n/);
   assert.ok(stage.includes('https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar'));
   assert.ok(stage.includes('echo "${APKTOOL_SHA256}  /opt/apktool/apktool.jar" | sha256sum -c -'));
