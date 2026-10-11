@@ -38,6 +38,7 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 | 调试 | `gdb` `strace` | 需要 `cap_add: SYS_PTRACE`，compose 里已配好 |
 | Android 调试 | `adb` | 设备调试 CLI，来自 Debian 归档包而非完整 SDK；[用法与边界见下](#adbandroid-调试桥) |
 | APK 分析 | `apktool` 2.12.1 | 官方 JAR + SHA-256 校验，复用镜像 Java；支持任意目录直接调用 |
+| DEX 反编译 | `ddc` 0.1.28 | Android DEX → Java 反编译器，官方 release 原始二进制；按架构分别校验 SHA-256，静态链接 |
 | 动态插桩 | `frida` 17.23.1 / `frida-tools` 14.11.0 | 独立 Python 环境，系统 PATH 提供 `frida`、`frida-ps`、`frida-trace` 等 CLI |
 | 版本控制 | `git` `git-lfs` `gh` | |
 | 其他 | `shellcheck` `bc` `rsync` `zip` / `unzip` | |
@@ -51,7 +52,15 @@ apktool b /path/to/decoded -o /path/to/rebuilt.apk
 docker exec --workdir /tmp dsh-agent apktool --version
 ```
 
-新增工具需要重建镜像并重建容器，已运行的旧容器不会自动获得 apktool。构建参数 `APKTOOL_VERSION` 与 `APKTOOL_SHA256` 必须配套更新。
+`ddc` 是单个静态二进制，直接落在 `PATH` 的 `/usr/local/bin`，同样不需要 wrapper 或进入安装目录：
+
+```bash
+ddc --version
+ddc /path/to/app.apk            # 全量反编译到 app-out/
+ddc --help                      # 子命令与选项
+```
+
+新增工具需要重建镜像并重建容器，已运行的旧容器不会自动获得 apktool 或 ddc。构建参数 `APKTOOL_VERSION` 与 `APKTOOL_SHA256`、`DDC_VERSION` 与 `DDC_SHA256_AMD64` / `DDC_SHA256_ARM64` 都必须配套更新。
 
 Frida CLI 同样支持任意目录调用，无需激活 Python 环境：
 
