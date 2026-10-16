@@ -42,9 +42,6 @@ ARG FRIDA_VERSION=17.23.1
 ARG FRIDA_TOOLS_VERSION=14.11.0
 ARG APKTOOL_VERSION=2.12.1
 ARG APKTOOL_SHA256=66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa
-ARG DDC_VERSION=0.1.28
-ARG DDC_SHA256_AMD64=7f6a90e035805a7f3d22f6095bf8db3ea612aefa01d688f08f316fd34ecda44d
-ARG DDC_SHA256_ARM64=2e3048b320f601be05936004b3df5957848c33f165ff0c41418fd8805b674927
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -248,31 +245,6 @@ COPY apktool.sh /usr/local/bin/apktool
 RUN set -eux; \
     chmod 0755 /usr/local/bin/apktool; \
     test "$(apktool --version)" = "$APKTOOL_VERSION"
-
-# -----------------------------------------------------------------------------
-# ddc —— Android DEX → Java 反编译器；上游 release 直接发未打包的原始二进制，
-# 所以按架构各取一个、单独校验，不做本地编译（见 .agents/notes 里的取舍）。
-#
-# 落点是 /usr/local/bin：ENV PATH 与 /etc/profile 的 PATH 都含它，因此
-# 不需要 wrapper、alias 或额外 PATH 编排 —— 与 apktool 需要启动脚本不同，
-# ddc 是静态链接的单个 ELF，直接就是可执行入口。
-#
-# 架构沿用 JDK 段的 dpkg 探测（不用 TARGETARCH），不开 BuildKit 也不会拿错。
-# 未校验的下载先落 /tmp，校验通过才进 PATH 目录。
-# -----------------------------------------------------------------------------
-RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
-    case "$arch" in \
-        amd64) ddc_target="x86_64-unknown-linux-gnu"; ddc_sha256="$DDC_SHA256_AMD64" ;; \
-        arm64) ddc_target="aarch64-unknown-linux-gnu"; ddc_sha256="$DDC_SHA256_ARM64" ;; \
-        *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/ddc \
-        "https://github.com/ejfkdev/ddc/releases/download/v${DDC_VERSION}/ddc-v${DDC_VERSION}-${ddc_target}"; \
-    echo "${ddc_sha256}  /tmp/ddc" | sha256sum -c -; \
-    install -m 0755 /tmp/ddc /usr/local/bin/ddc; \
-    rm -f /tmp/ddc; \
-    test "$(ddc --version | head -n1 | awk '{print $1, $2}')" = "ddc $DDC_VERSION"
 
 # -----------------------------------------------------------------------------
 # Maven —— 走官方 tarball，理由和 Gradle 不同
@@ -492,7 +464,6 @@ RUN set -eux; \
              gh --version; gdb --version; strace -V; \
              adb version; \
               (cd /tmp && apktool --version); \
-              (cd /tmp && ddc --version); \
               (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null); \
              for c in xxd file tree nc dig ss lsof bc man; do command -v "$c" >/dev/null; done; \
              dsh --help > /dev/null'; \

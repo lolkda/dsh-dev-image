@@ -26,4 +26,4 @@ Debian apt 包安装最简洁且自动管理依赖，但会引入发行版 Java 
 
 ## Related notes audit
 
-检索现有笔记的 apktool、PATH、Java、java、adb：root-only-runtime 仅涉及身份与既有 PATH 不变量，属于相关但不重叠决策；无可复用的 apktool 安装笔记。后续的 [ddc CLI](2026-10-11-ddc-cli.md) 同属「装进已有 PATH 的 CLI」，但它走单二进制路线、不需要启动脚本，与本篇决定互不取代。
+检索现有笔记的 apktool、PATH、Java、java、adb：root-only-runtime 仅涉及身份与既有 PATH 不变量，属于相关但不重叠决策；无可复用的 apktool 安装笔记。
