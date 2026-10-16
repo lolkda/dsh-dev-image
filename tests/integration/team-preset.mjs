@@ -12,7 +12,7 @@ import { AgentLoop } from '@deepseek-ai/dsh-agent-loop';
 import PresetRegistry from '@deepseek-ai/dsh-agent-preset-registry';
 import { SessionStore } from '@deepseek-ai/dsh-session';
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
-import JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl';
+import * as JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl';
 import { SessionQueryEngine } from '@deepseek-ai/dsh-session-query';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import ToolRuntime from '@deepseek-ai/dsh-tools';
