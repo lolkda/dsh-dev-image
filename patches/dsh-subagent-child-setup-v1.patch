@@ -1,9 +1,9 @@
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -1813,7 +1813,33 @@
+@@ -1804,7 +1804,33 @@
  					await workingDirectory.set(child, create.cwd, inputs.signal);
  				}
- 				applyChildComposition(childCtx, parent, inputs.composition);
+ 				if (inputs.composition.agentPreset === void 0) await applyChildComposition(childCtx, parent, inputs.composition);
 +				// Restore the child's durable identity even when the selecting plugin was removed.
 +				// Parent fork events are not the child's selection; its header is the fallback.
 +				if (create === undefined) {
@@ -34,7 +34,7 @@
  			};
  			const handle = create === void 0 ? await this.ownerCtx.agents.resume({
  				resumeSessionId: childId,
-@@ -2977,6 +3003,7 @@
+@@ -2981,6 +3007,7 @@
  		});
  		static inject = ["workingDirectory"];
  		providers = /* @__PURE__ */ new Map();
@@ -42,7 +42,7 @@
  		manager;
  		/**
  		* The contained lifecycle-edge publisher. Built here because scoped dispatch
-@@ -2994,7 +3021,8 @@
+@@ -2998,7 +3025,8 @@
  						return this.expectProvider(name).start(request);
  					},
  					prepareContinuable: (name, request) => this.prepareContinuable(name, request),
@@ -52,7 +52,7 @@
  				}, () => this.config.maxActiveSubagents.get());
  				this.manager = manager;
  				childCtx.effect(() => () => {
-@@ -3011,6 +3039,47 @@
+@@ -3015,6 +3043,47 @@
  				installSubagentArchiveAdmission(agentsCtx);
  			});
  		}
@@ -168,10 +168,10 @@
           * @param configured - Explicit tool limit, or provider-managed for external delegation.
 --- a/lib/types/manager.js
 +++ b/lib/types/manager.js
-@@ -773,11 +773,37 @@
-                     await workingDirectory.set(child, create.cwd, inputs.signal);
+@@ -778,11 +778,37 @@
                  }
-                 applyChildComposition(childCtx, parent, inputs.composition);
+                 if (inputs.composition.agentPreset === undefined)
+                     await applyChildComposition(childCtx, parent, inputs.composition);
 +                // Restore the child's durable identity even when the selecting plugin was removed.
 +                // Parent fork events are not the child's selection; its header is the fallback.
 +                if (create === undefined) {

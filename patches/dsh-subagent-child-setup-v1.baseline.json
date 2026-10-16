@@ -1,22 +1,22 @@
 {
   "package": "@deepseek-ai/dsh-subagent",
-  "version": "0.2.1-alpha.2",
+  "version": "0.2.1-alpha.4",
   "files": {
     "lib/index.js": {
-      "beforeSha256": "09da454106ce761ac44137366a03c9fbe485a4d21f23d1aa117b2e38f82150fa",
-      "afterSha256": "c26b77242a6f2f7a54be36a0c2380f8237d8984fccff7a817258e6040896f52d"
+      "beforeSha256": "9a9572e70fffdb100deb63326167f32bbf63016ce49c0017495dabcb95b44168",
+      "afterSha256": "5b8c7121469eeb02b99719fd9e37f5a62348442a20eab5998827d9a9df5f1993"
     },
     "lib/types/index.js": {
-      "beforeSha256": "8ea60cc1424ea85d187eb80bc295190dbab023815c30c680edcf724c8533d507",
-      "afterSha256": "3674e3893a40068f816f3c6ec29fc3e85e2038e85e53849dfbb78ee04a68d0bc"
+      "beforeSha256": "e116c7cf57e9c4952a225ee2937faced2877af11fe2cf003ee519543561e8ad5",
+      "afterSha256": "3129655a18c98470f69bbfc3a46d65904c4917156a87d9fa1bd349029e1f398f"
     },
     "lib/types/manager.js": {
-      "beforeSha256": "f4a348230fc2acd39f5a5577bf48e269a5fa6be135cc9e0889e61979911fc512",
-      "afterSha256": "0c9f638ceac884ba218f655c2621e3712964351119a8d5b59af6d3a64d7fad67"
+      "beforeSha256": "3f7dd4199579b2555acf59482d84dc567cf69ad32271435996fd370a2d1ecdba",
+      "afterSha256": "f02dd3b34fb7c1efeeeb09210272a84bb3e250b1c1f4781905bb8dccc88c5f73"
     },
     "lib/types/types.d.ts": {
-      "beforeSha256": "9269046f659c2511fc5a6cbadbc62aa59ac93e18571d687e29ec40f8ee278817",
-      "afterSha256": "5ce2bb0cec8eab3cff26c45c2511c5bccd032f295fa9be36f763adec78e85ef1"
+      "beforeSha256": "725145479cd332c4ea6ff6b830e696b3e4976173dbb1ab3d57f432a2fbaefd03",
+      "afterSha256": "ba5bf5b65e3444fedfbb8174bb5e8cb71fcd8fdd53b6289025f663bd860a5e18"
     },
     "lib/types/index.d.ts": {
       "beforeSha256": "bc0a78235eeb39586769204d70ed8a69cb2a26fe2893cb716b142455c9d705a5",

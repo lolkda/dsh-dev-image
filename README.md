@@ -17,7 +17,7 @@
 | Go | 1.27.1 | go.dev 官方 tarball |
 | Java | Temurin 24.0.2+12 | Adoptium API tarball |
 | git | bookworm apt | — |
-| DSH | 0.2.1-alpha.2 | npm |
+| DSH | 0.2.1-alpha.4 | npm |
 | pnpm | 12.4.2 | npm（`dsh plugin` 依赖它） |
 
 Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，所以 COPY 安全。Go 和 Java 不走 COPY，原因见下。
@@ -451,7 +451,7 @@ docker compose build --build-arg JDK_VERSION=25
 |---|---|---|
 | `GO_VERSION` | `1.27.1` | 校验和从 go.dev API 现取，改版本不用手改 sha |
 | `JDK_VERSION` | `24` | Adoptium 的 feature version |
-| `DSH_VERSION` | `0.2.1-alpha.2` | npm 版本号或 dist-tag |
+| `DSH_VERSION` | `0.2.1-alpha.4` | npm 版本号或 dist-tag |
 | `PNPM_VERSION` | `12.4.2` | — |
 | `TYPESCRIPT_VERSION` | `7.0.2` | TypeScript 编译器 `tsc` |
 | `TSX_VERSION` | `4.23.15` | TS / TSX 脚本运行器 |
@@ -606,7 +606,7 @@ node 镜像把 yarn 装在 `/opt/yarn-1.22.22/`，而 `/usr/local/bin/yarn` 是�
 musl libc 和 manylinux wheel、native node 模块、JVM 全部不兼容，等于逼你从源码构建一切。
 
 **`dsh` 不用 `@latest`。**
-dist-tag 会变化，且不保证指向所需的预发布版本。镜像通过 `DSH_VERSION` 显式固定为 `0.2.1-alpha.2`，避免重建时随标签漂移。
+dist-tag 会变化，且不保证指向所需的预发布版本。镜像通过 `DSH_VERSION` 显式固定为 `0.2.1-alpha.4`，避免重建时随标签漂移。
 
 **镜像工具链与用户 CLI 分开。**
 `/usr/local` 保留构建期属主，运行时 root 可修改它，但容器重建后丢弃；新用户 CLI 通过持久化 HOME 下的原生安装目录避免重建丢失。显式指定 `/usr/local` 的系统级安装不保证重建后保留。DSH 插件继续安装在 `/app/.dsh`，项目依赖优先使用工作区或虚拟环境。
