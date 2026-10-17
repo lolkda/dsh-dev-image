@@ -7,7 +7,7 @@ import { test } from 'node:test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const dockerfile = read('Dockerfile');
-const defaultPlugins = '@lolkda/dsh-web-lan dsh-auto-thinking-levels';
+const defaultPlugins = '@lolkda/dsh-web-lan@latest';
 
 test('image defaults contain the shared plugin list', () => {
   const expression = dockerfile.match(/^\s*DSH_PLUGINS=(.+)$/m)?.[1];
@@ -16,17 +16,18 @@ test('image defaults contain the shared plugin list', () => {
   assert.equal(value, defaultPlugins);
 });
 
-// 两个插件都独立发版：默认列表不写版本号，启动时由 pnpm 解析 registry 最新发布。
+// 默认插件用 @latest 跟随发行：只写包名时 pnpm 会沿用 profile 里已登记的 spec，
+// 重启不会升级，所以 spec 必须显式带 @latest 而不是省略版本。
 const pluginDefaults = [
   ['Dockerfile', dockerfile],
   ['compose.yml', read('compose.yml')],
   ['compose.bridge.yml', read('compose.bridge.yml')],
 ];
-const pinnedSpecs = /@lolkda\/dsh-web-lan@|dsh-auto-thinking-levels@/;
+const pinnedSpecs = /@lolkda\/dsh-web-lan@\d/;
 for (const [path, source] of pluginDefaults) {
-  test(`${path}: default plugin specs carry no versions so startup installs the latest releases`, () => {
-    assert.match(source, /@lolkda\/dsh-web-lan/);
-    assert.match(source, /dsh-auto-thinking-levels/);
+  test(`${path}: default plugin spec is @latest so every startup re-resolves the registry`, () => {
+    assert.match(source, /@lolkda\/dsh-web-lan@latest/);
+    assert.doesNotMatch(source, /dsh-auto-thinking-levels/);
     assert.doesNotMatch(source, pinnedSpecs);
   });
 }

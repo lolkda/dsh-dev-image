@@ -408,27 +408,28 @@ profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**�
 
 ### 默认插件与升级
 
-镜像和两份 Compose 的默认列表是：
+镜像和两份 Compose 的默认列表只有 LAN 插件：
 
 | 插件 | 版本 | 用途 |
 |---|---|---|
-| `@lolkda/dsh-web-lan` | 不锁定：每次启动装 registry 最新发布 | Web 局域网访问与相关设置 |
-| [`dsh-auto-thinking-levels`](https://github.com/lolkda/dsh-auto-thinking-levels) | 不锁定：每次启动装 registry 最新发布 | 为 `llm-pi-ai` 路由补充缺失的思考等级，不覆盖已有档位或 `reasoningEfforts: false` |
+| `@lolkda/dsh-web-lan` | `@latest`：每次启动重新解析 registry 最新发布 | Web 局域网访问与相关设置 |
 
-两个默认插件都刻意不写版本号。它们独立于镜像发版（写这份说明时 registry 上 web-lan 是 `0.2.0`、auto-thinking-levels 是 `0.1.2`，而镜像过去锁的是 `0.1.1` / `0.1.0`）：锁死版本意味着插件发新版后，只拉镜像、只重启容器都不会更新，只能改 `DSH_PLUGINS` 重建镜像。不写版本时，每次启动都由 `pnpm add <包名>` 解析 registry 当前的 latest，镜像不必为了插件升级重新发布。
+**`dsh-auto-thinking-levels` 已从默认列表移除**：当前镜像锁定的 DSH 版本在 `llm-pi-ai` 的模型目录里自带完整的 `reasoningEfforts`，不再需要插件补档位。旧容器或部署面板残留的 `DSH_PLUGINS` 覆盖值若还带着它，插件仍会照常安装；要彻底清掉，先从环境变量里删掉，再在容器内执行 `dsh plugin --profile web remove dsh-auto-thinking-levels`，已登记的 bundle 条目会随依赖一起清理。
 
-**入口会关掉 pnpm 的新版本成熟期**（[entrypoint.sh](entrypoint.sh) 里 `PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）。pnpm 12 自带 24 小时 `minimumReleaseAge`（默认 1440 分钟），会把"刚发布、还不够成熟"的版本回退到上一个成熟版本 —— 实测 web-lan `0.2.0` 发布 3 小时时，裸装解析到的仍是 `0.1.1`。要求"装最新"就得绕开它，否则"不指定版本"实际等价于"装一天前的最新版"。这个覆盖只作用于 `DSH_PLUGINS` 的安装命令，容器里用户项目的 pnpm 安装仍走 pnpm 自己的默认策略。
+默认插件写成 `@lolkda/dsh-web-lan@latest`，不锁具体版本号。它独立于镜像发版（写这份说明时 registry 上 web-lan 是 `0.4.0`，镜像不锁版本）：锁死版本意味着插件发新版后，只拉镜像、只重启容器都不会更新，只能改 `DSH_PLUGINS` 重建镜像。**只写包名、不带 `@latest` 并不够**：pnpm 对 profile 里已登记的依赖会沿用原 spec，不会重新解析 latest —— 实测把依赖写死 `0.1.1` 后再跑 `pnpm add @lolkda/dsh-web-lan`，装的仍是 `0.1.1`（此时 registry latest 已是 `0.4.0`）。要"每次启动都跟最新"，spec 必须显式带 `@latest`。
+
+**入口会关掉 pnpm 的新版本成熟期**（[entrypoint.sh](entrypoint.sh) 里 `PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）。pnpm 12 自带 24 小时 `minimumReleaseAge`（默认 1440 分钟），会把"刚发布、还不够成熟"的版本回退到上一个成熟版本 —— 实测 web-lan `0.2.0` 发布 3 小时时，裸装解析到的仍是 `0.1.1`。要求"装最新"就得绕开它，否则 `@latest` 实际等价于"一天前的最新版"。这个覆盖只作用于 `DSH_PLUGINS` 的安装命令，容器里用户项目的 pnpm 安装仍走 pnpm 自己的默认策略。
 
 代价说清楚：**同一个镜像在不同时间启动可能装到不同版本**，上游发大版本（含破坏性改动）也会被直接吃进来；registry 不可达时按 `DSH_PLUGINS_REQUIRED` 处理（默认直接退出）。要可复现就在 `DSH_PLUGINS` 里写死版本。
 
-这里的“内置”沿用启动时自动安装并登记到 profile 的方式，不代表首次启动无需联网。自动思考等级插件只处理 `llm-pi-ai`，不保证其他 adapter 或上游模型支持所有等级。
+这里的“内置”沿用启动时自动安装并登记到 profile 的方式，不代表首次启动无需联网。
 
 ### 加 / 换插件
 
-在 [compose.yml](compose.yml) 中覆盖 `DSH_PLUGINS`（空格分隔，需要额外插件时追加到末尾；版本号可写可不写）：
+在 [compose.yml](compose.yml) 中覆盖 `DSH_PLUGINS`（空格分隔，需要额外插件时追加到末尾；要跟最新写 `@latest`，要可复现写具体版本号）：
 
 ```yaml
-DSH_PLUGINS: "@lolkda/dsh-web-lan dsh-auto-thinking-levels"
+DSH_PLUGINS: "@lolkda/dsh-web-lan@latest"
 ```
 
 升级旧容器时必须重新创建容器。若部署面板或旧配置保留了原来的 `DSH_PLUGINS` 环境变量，请清除覆盖值或改为上面的新列表；只拉取镜像、只重启旧容器不会更新已经保存的环境变量。启动用户固定为 `0:0`，入口和主程序全程使用 root，不再降权。

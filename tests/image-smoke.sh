@@ -162,9 +162,9 @@ main() {
         const { execFileSync } = require("node:child_process");
         const profile = `${process.env.DSH_HOME}/profiles/web`;
         const pkg = JSON.parse(fs.readFileSync(`${profile}/package.json`, "utf8"));
-        // 两个默认插件都不带版本号，镜像就该装到 registry 当前的 latest；写死版本号
+        // 默认插件写 @latest，镜像装的必须是 registry 当前的 latest；写死具体版本号
         // 只会放过"镜像里还是旧插件"的情况。查询走镜像内的 registry 配置，与安装同源。
-        for (const name of ["@lolkda/dsh-web-lan", "dsh-auto-thinking-levels"]) {
+        for (const name of ["@lolkda/dsh-web-lan"]) {
             const expected = execFileSync("npm", ["view", name, "version"], { encoding: "utf8" }).trim();
             assert.match(expected, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, "unexpected registry answer for " + name + ": " + expected);
             assert.ok(pkg.dependencies?.[name], name + " is missing from dependencies");

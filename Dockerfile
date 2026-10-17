@@ -498,9 +498,10 @@ RUN set -eux; \
 # entrypoint 会跳过插件登记，dsh 就绑 127.0.0.1，外面完全连不上 —— 典型的
 # "看起来起来了但用不了"。想关掉就显式 `-e DSH_PLUGINS=`（空值会被尊重）。
 #
-# 两个默认插件都刻意不带版本号：它们独立发版，写死版本就只能靠重建镜像更新，
-# 旧容器会一直停在旧插件上。不写版本时每次启动装 registry 最新发布；要固定就覆盖
-# DSH_PLUGINS。
+# 默认插件写 `@latest` 而不是具体版本号：插件独立发版，写死版本就只能靠重建镜像
+# 更新，旧容器会一直停在旧插件上。但只写包名（不带 @latest）也不够 —— pnpm 会沿用
+# profile 里已登记的 spec，重启并不会升级。`@latest` 让每次启动都重新解析 registry
+# 当前的 latest；要固定就覆盖 DSH_PLUGINS。
 #
 # CMD 设成 dsh web，所以 `docker run <image>` 开箱即用；要 shell 就
 # `docker run -it <image> bash`（参数会覆盖 CMD）。
@@ -533,7 +534,7 @@ ENV HOME=/app/.home \
     GOBIN=/app/.home/.local/bin \
     PNPM_CONFIG_STORE_DIR=/app/.cache/pnpm-store \
     PATH=/app/.home/.local/bin:/app/.home/.local/share/pnpm/bin:${PATH}:/app/.home/bin \
-    DSH_PLUGINS="@lolkda/dsh-web-lan dsh-auto-thinking-levels"
+    DSH_PLUGINS="@lolkda/dsh-web-lan@latest"
 
 USER 0:0
 WORKDIR /app

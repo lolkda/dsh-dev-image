@@ -31,8 +31,8 @@ services:
       PIP_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
       UV_DEFAULT_INDEX: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
       DSH_PROFILE: ${DSH_PROFILE:-web}
-      # 插件都不带版本号：每次启动装 registry 最新发布。
-      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan dsh-auto-thinking-levels}
+      # 插件写 @latest：每次启动重新解析 registry 最新发布。
+      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan@latest}
       DSH_PLUGINS_REQUIRED: ${DSH_PLUGINS_REQUIRED:-1}
       DSH_WEB_TRUSTED_HOSTS: ${DSH_HOST:-127.0.0.1}
 
