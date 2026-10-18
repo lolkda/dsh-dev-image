@@ -4,7 +4,7 @@
 
 ## 包含什么
 
-版本均已核实存在（2026-09 实测 Docker Hub / Adoptium API / go.dev API / npm registry）。
+版本均已核实存在（2026-09 实测 Docker Hub / Adoptium API / go.dev API / npm registry；DexSQL 为 2026-10-18 的 v0.1.1）。
 
 | 组件 | 版本 | 来源 |
 |---|---|---|
@@ -38,6 +38,7 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 | 调试 | `gdb` `strace` | 需要 `cap_add: SYS_PTRACE`，compose 里已配好 |
 | Android 调试 | `adb` | 设备调试 CLI，来自 Debian 归档包而非完整 SDK；[用法与边界见下](#adbandroid-调试桥) |
 | APK 分析 | `apktool` 2.12.1 | 官方 JAR + SHA-256 校验，复用镜像 Java；支持任意目录直接调用 |
+| APK / DEX 查询 | `dexsql` 0.1.1 | 官方 Linux 二进制 + SHA-256；同一可执行文件提供 CLI 和 stdio MCP |
 | 动态插桩 | `frida` 17.23.1 / `frida-tools` 14.11.0 | 独立 Python 环境，系统 PATH 提供 `frida`、`frida-ps`、`frida-trace` 等 CLI |
 | 版本控制 | `git` `git-lfs` `gh` | |
 | 其他 | `shellcheck` `bc` `rsync` `zip` / `unzip` | |
@@ -52,6 +53,17 @@ docker exec --workdir /tmp dsh-agent apktool --version
 ```
 
 新增工具需要重建镜像并重建容器，已运行的旧容器不会自动获得 apktool。构建参数 `APKTOOL_VERSION` 与 `APKTOOL_SHA256` 必须配套更新。
+
+`dexsql` 也已内置，既可以直接查 APK/DEX，也可以通过 MCP 使用：
+
+```bash
+dexsql --version
+dexsql query --input /app/app.apk --sql "SELECT count(*) FROM methods"
+dexsql mcp --help
+docker exec --workdir /tmp dsh-agent dexsql --version
+```
+
+镜像默认通过本地 DSH bundle 自动注册 `dexsql-mcp`，新会话会直接看到 `mcp__dexsql__*` 工具，不需要手动改 profile。DexSQL 是 LSPosed 的闭源二进制，采用 DexSQL Binary License 1.0；镜像在 `/opt/dexsql/<version>/` 保留了 `LICENSE`、`LICENSE-AUXILIARY` 和构建时导出的 `THIRD_PARTY_NOTICES`。构建参数 `DEXSQL_VERSION`、`DEXSQL_SHA256_AMD64`、`DEXSQL_SHA256_ARM64` 必须配套更新。
 
 Frida CLI 同样支持任意目录调用，无需激活 Python 环境：
 
@@ -235,7 +247,7 @@ docker compose exec agent bash
 
 ```bash
 docker run --rm -e DSH_PLUGINS= chikennice/dsh-dev-image:latest bash -lc \
-  'python -V && node -v && pnpm -v && tsc --version && tsx --version && go version && rustc -V && java -version && git --version && adb version >/dev/null && dsh --help >/dev/null && echo ALL-OK'
+  'python -V && node -v && pnpm -v && tsc --version && tsx --version && go version && rustc -V && java -version && git --version && adb version >/dev/null && dexsql --version && dexsql mcp --help >/dev/null && dsh --help >/dev/null && echo ALL-OK'
 ```
 
 镜像构建过程本身有两道检查：每条 COPY 后面立刻验证该工具链，最后再跑一次全链路冒烟。任何一条路径不对，`docker compose build` 当场失败，不会拖到运行时。
@@ -408,15 +420,20 @@ profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**�
 
 ### 默认插件与升级
 
-镜像和两份 Compose 的默认列表只有 LAN 插件：
+镜像和两份 Compose 的默认列表包含 LAN 插件和本地 DexSQL MCP bundle：
 
 | 插件 | 版本 | 用途 |
 |---|---|---|
 | `@lolkda/dsh-web-lan` | `@latest`：每次启动重新解析 registry 最新发布 | Web 局域网访问与相关设置 |
+| `@local/dsh-dexsql-mcp` | 本地 bundle，随镜像内置 | 自动注入 `dexsql-mcp` 配置，暴露 `mcp__dexsql__*` 工具 |
+
+本地 bundle 位于镜像的 `/opt/dsh-bundles/dsh-dexsql-mcp`，通过 `link:` 安装。它只负责 MCP 配置，不包含 DexSQL 二进制；二进制在镜像层 `/opt/dexsql/<version>/dexsql`。
 
 **`dsh-auto-thinking-levels` 已从默认列表移除**：当前镜像锁定的 DSH 版本在 `llm-pi-ai` 的模型目录里自带完整的 `reasoningEfforts`，不再需要插件补档位。旧容器或部署面板残留的 `DSH_PLUGINS` 覆盖值若还带着它，插件仍会照常安装；要彻底清掉，先从环境变量里删掉，再在容器内执行 `dsh plugin --profile web remove dsh-auto-thinking-levels`，已登记的 bundle 条目会随依赖一起清理。
 
 默认插件写成 `@lolkda/dsh-web-lan@latest`，不锁具体版本号。它独立于镜像发版（写这份说明时 registry 上 web-lan 是 `0.4.0`，镜像不锁版本）：锁死版本意味着插件发新版后，只拉镜像、只重启容器都不会更新，只能改 `DSH_PLUGINS` 重建镜像。**只写包名、不带 `@latest` 并不够**：pnpm 对 profile 里已登记的依赖会沿用原 spec，不会重新解析 latest —— 实测把依赖写死 `0.1.1` 后再跑 `pnpm add @lolkda/dsh-web-lan`，装的仍是 `0.1.1`（此时 registry latest 已是 `0.4.0`）。要"每次启动都跟最新"，spec 必须显式带 `@latest`。
+
+DexSQL 本地 bundle 不跟随 registry：`link:/opt/dsh-bundles/dsh-dexsql-mcp` 指向镜像内固定内容，版本由 `DEXSQL_VERSION` 控制。它只提供 MCP 配置，DexSQL 二进制本体仍由 Dockerfile 下载并校验。
 
 **入口会关掉 pnpm 的新版本成熟期**（[entrypoint.sh](entrypoint.sh) 里 `PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）。pnpm 12 自带 24 小时 `minimumReleaseAge`（默认 1440 分钟），会把"刚发布、还不够成熟"的版本回退到上一个成熟版本 —— 实测 web-lan `0.2.0` 发布 3 小时时，裸装解析到的仍是 `0.1.1`。要求"装最新"就得绕开它，否则 `@latest` 实际等价于"一天前的最新版"。这个覆盖只作用于 `DSH_PLUGINS` 的安装命令，容器里用户项目的 pnpm 安装仍走 pnpm 自己的默认策略。
 
@@ -429,8 +446,10 @@ profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**�
 在 [compose.yml](compose.yml) 中覆盖 `DSH_PLUGINS`（空格分隔，需要额外插件时追加到末尾；要跟最新写 `@latest`，要可复现写具体版本号）：
 
 ```yaml
-DSH_PLUGINS: "@lolkda/dsh-web-lan@latest"
+DSH_PLUGINS: "@lolkda/dsh-web-lan@latest link:/opt/dsh-bundles/dsh-dexsql-mcp"
 ```
+
+如果不需要 DexSQL MCP，覆盖 `DSH_PLUGINS` 时去掉 `link:/opt/dsh-bundles/dsh-dexsql-mcp` 即可；只保留 `@lolkda/dsh-web-lan@latest` 就不会加载 `dexsql-mcp`。
 
 升级旧容器时必须重新创建容器。若部署面板或旧配置保留了原来的 `DSH_PLUGINS` 环境变量，请清除覆盖值或改为上面的新列表；只拉取镜像、只重启旧容器不会更新已经保存的环境变量。启动用户固定为 `0:0`，入口和主程序全程使用 root，不再降权。
 
@@ -456,6 +475,9 @@ docker compose build --build-arg JDK_VERSION=25
 | `PNPM_VERSION` | `12.4.2` | — |
 | `TYPESCRIPT_VERSION` | `7.0.2` | TypeScript 编译器 `tsc` |
 | `TSX_VERSION` | `4.23.15` | TS / TSX 脚本运行器 |
+| `DEXSQL_VERSION` | `0.1.1` | DexSQL 官方 release 版本 |
+| `DEXSQL_SHA256_AMD64` | `f35c5761…` | Linux amd64 二进制校验和 |
+| `DEXSQL_SHA256_ARM64` | `8095a4ac…` | Linux arm64 二进制校验和 |
 
 > **Java 版本建议**：24 是 non-LTS，早已 EOL。当前 LTS 是 **25**，最新 feature release 是 26。走 Adoptium 路线换版本**不需要动 base**，改 `JDK_VERSION` 即可。
 >
@@ -618,7 +640,7 @@ dist-tag 会变化，且不保证指向所需的预发布版本。镜像通过 `
 ## 已知缺口
 
 - **容器里的 profile 是全新的空 profile。** 宿主 `~/.dsh/profiles/web` 里的东西（dshmarket、prompt-manager、skills-manager、`link:` 装的本地插件）不会自动跟过来，只有 `DSH_PLUGINS` 里列的会装。要带全套得另做 seed。
-- **MCP 服务器同理**：它们注册在 profile 的 `cordis.patch.yml` 里，不在容器里。而且 `ida` / `reqable` 是 Windows 宿主上的应用，本来就带不过来；`fastctx` 是纯文件/shell，可以。
+- **MCP 服务器同理**：它们注册在 profile 的 `cordis.patch.yml` 里，不在容器里。而且 `ida` / `reqable` 是 Windows 宿主上的应用，本来就带不过来；`fastctx` 是纯文件/shell，可以。本仓库内置的 DexSQL 是例外：二进制和本地 bundle 都在镜像内，首次启动自动注册。
 - **`adb` 只有命令本身，默认没有 USB 透传。** 容器未映射宿主 USB 设备，也没装 udev 规则推荐包，真机调试的 udev 授权与设备映射由使用者在宿主侧按需处理；默认 compose 不为此扩大权限。详见 [ADB（Android 调试桥）](#adbandroid-调试桥)。
 - 默认没有 docker 访问能力，容器内不能 `docker build` / `docker compose up`。
 - 默认只支持 `amd64` / `arm64`，其他架构会在 Java / Go 那两步显式报错退出。
@@ -636,7 +658,7 @@ sh -n cli-env.sh
 node --check home-init.mjs
 ```
 
-Linux 测试机上补跑 `sudo env PATH="$PATH" bash tests/entrypoint.test.sh` 和 `sudo env PATH="$PATH" node --test tests/*.test.mjs`；只操作隔离 fixture，不应对真实工作区运行入口。[CLI 回归测试](tests/entrypoint.test.sh) 实际执行 root 入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置测试可在 Git Bash 运行，root-only 入口验收需要 Linux。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
+Linux 测试机上补跑 `sudo env PATH="$PATH" bash tests/entrypoint.test.sh` 和 `sudo env PATH="$PATH" node --test tests/*.test.mjs`；只操作隔离 fixture，不应对真实工作区运行入口。[CLI 回归测试](tests/entrypoint.test.sh) 实际执行 root 入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[DexSQL 回归](tests/dexsql.test.mjs) 校验二进制版本/架构校验和、许可证、MCP bundle 配置和默认插件注入；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置测试可在 Git Bash 运行，root-only 入口验收需要 Linux。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
 
 Linux + Docker 下的快速权限验收：
 
@@ -655,7 +677,7 @@ bash tests/container-runtime.sh dsh-dev-image:verify
 bash tests/image-smoke.sh dsh-dev-image:verify
 ```
 
-[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 TypeScript/TSX 与 Rust 编译运行、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程；同时在 **root** 的两种 Shell 里从 `/tmp` 执行 `adb version`，再用裸 `docker exec --workdir /tmp` 复核一次，全程不启动 ADB server（构建期也在两条 PATH 路径上各跑一次 `adb version`）。[TypeScript 验收](tests/typescript-smoke.sh) 在 root 的两种 Shell 中验证 ESM 跨模块导入、`enum` 转译、无框架 TSX 和类型错误拒绝，不下载项目依赖。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 以 root 在新目录与旧 UID 目录中运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
+[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 TypeScript/TSX 与 Rust 编译运行、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程；同时在 **root** 的两种 Shell 里从 `/tmp` 执行 `adb version`、`dexsql --version` 和 `dexsql mcp --help`，再用裸 `docker exec --workdir /tmp` 复核一次，全程不启动 ADB server（构建期也在两条 PATH 路径上各跑一次 `adb version` 和 `dexsql --version`）。[TypeScript 验收](tests/typescript-smoke.sh) 在 root 的两种 Shell 中验证 ESM 跨模块导入、`enum` 转译、无框架 TSX 和类型错误拒绝，不下载项目依赖。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 以 root 在新目录与旧 UID 目录中运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
 
 DSH 对匿名 `/` 请求返回 `401` 是正常鉴权行为，不能用匿名 `curl --fail` 判断服务是否启动。验收从该测试容器的启动日志取 token，跟随登录重定向并保留 cookie，最终必须获得 `200`；不会为了测试通过而关闭鉴权。[Web 登录回归](tests/web-ready.test.mjs) 使用真实 HTTP 服务覆盖此流程及失败分支。
 

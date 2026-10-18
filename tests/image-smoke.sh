@@ -47,7 +47,7 @@ main() {
             test "$HOME" = /app/.home
             test "$(getent passwd root | cut -d: -f6)" = "$HOME"
             test -d "$HOME" && test ! -L "$HOME"
-            for tool in frida frida-ps frida-trace frida-ls-devices apktool adb python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
+            for tool in frida frida-ps frida-trace frida-ls-devices apktool adb dexsql python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
                         git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
                 command -v "$tool" >/dev/null
             done
@@ -56,6 +56,7 @@ main() {
             # 所以给 docker run 加 --workdir 并不足以证明"任意目录"，必须在这里自己切；
             # 用 subshell 是为了不改动本块其余断言（pnpm store / cargo build）依赖的 cwd。
             (cd /tmp && apktool --version)
+            (cd /tmp && dexsql --version && dexsql mcp --help >/dev/null)
             (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null)
             adb_from_tmp="$(cd /tmp && test "$PWD" = /tmp && adb version)"
             printf "Verified adb CLI from /tmp: %s\n" "$adb_from_tmp"
@@ -173,9 +174,14 @@ main() {
             assert.equal(installed.version, expected, name + ": installed " + installed.version + ", expected latest " + expected);
             console.log("Verified plugin: " + name + "@" + installed.version);
         }
+        const dexsqlBundle = "@local/dsh-dexsql-mcp";
+        assert.ok(pkg.dependencies?.[dexsqlBundle], dexsqlBundle + " is missing from dependencies");
+        assert.ok(pkg.dsh?.profile?.bundles?.includes(dexsqlBundle), dexsqlBundle + " is not registered as a bundle");
         assert.equal(process.getuid(), 0);
         assert.equal(process.getgid(), 0);
     '
+    docker exec "$web_id" sh -c 'dsh --profile web --dump-config | grep -q "id: dexsql-mcp"'
+    printf 'Verified DexSQL MCP entry in the live profile\n'
     # 裸 docker exec：exec 不经过入口（entrypoint 不会 cd "$APP_DIR"），也不经登录 shell
     # 或任何 alias；root 用户 --workdir /tmp 下无 shell 包装直接调用 adb。
     # 用消费全部输出的 grep（不用 -q）：避免 pipefail 下匹配即退出导致上游 SIGPIPE。
@@ -183,6 +189,8 @@ main() {
         | grep -i "^Android Debug Bridge version " >/dev/null
     printf 'Verified adb CLI over bare docker exec from /tmp\n'
     docker exec --workdir /tmp "$web_id" apktool --version
+    docker exec --workdir /tmp "$web_id" dexsql --version
+    docker exec --workdir /tmp "$web_id" dexsql mcp --help >/dev/null
     docker exec --workdir /tmp "$web_id" frida --version
     for tool in frida-ps frida-trace frida-ls-devices; do
         docker exec --workdir /tmp "$web_id" "$tool" --help >/dev/null

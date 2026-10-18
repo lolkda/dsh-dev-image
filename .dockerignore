@@ -9,5 +9,7 @@
 !home-init.mjs
 !cli-env.sh
 !apktool.sh
+!bundles/
+!bundles/**
 !patches/
 !patches/**

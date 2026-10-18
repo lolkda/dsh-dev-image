@@ -7,7 +7,7 @@ import { test } from 'node:test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const dockerfile = read('Dockerfile');
-const defaultPlugins = '@lolkda/dsh-web-lan@latest';
+const defaultPlugins = '@lolkda/dsh-web-lan@latest link:/opt/dsh-bundles/dsh-dexsql-mcp';
 
 test('image defaults contain the shared plugin list', () => {
   const expression = dockerfile.match(/^\s*DSH_PLUGINS=(.+)$/m)?.[1];
