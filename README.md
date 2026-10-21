@@ -63,7 +63,7 @@ dexsql mcp --help
 docker exec --workdir /tmp dsh-agent dexsql --version
 ```
 
-镜像默认通过本地 DSH bundle 自动注册 `dexsql-mcp`，新会话会直接看到 `mcp__dexsql__*` 工具，不需要手动改 profile。DexSQL 是 LSPosed 的闭源二进制，采用 DexSQL Binary License 1.0；镜像在 `/opt/dexsql/<version>/` 保留了 `LICENSE`、`LICENSE-AUXILIARY` 和构建时导出的 `THIRD_PARTY_NOTICES`。构建参数 `DEXSQL_VERSION`、`DEXSQL_SHA256_AMD64`、`DEXSQL_SHA256_ARM64` 必须配套更新。
+镜像默认通过 npm 包 `@lolkda/dsh-dexsql-mcp@latest` 自动注册 `dexsql-mcp`，新会话会直接看到 `mcp__dexsql__*` 工具，不需要手动改 profile。该 npm 包只提供 MCP 配置，不包含 DexSQL 二进制；二进制仍由本镜像安装。DexSQL 是 LSPosed 的闭源二进制，采用 DexSQL Binary License 1.0；镜像在 `/opt/dexsql/<version>/` 保留了 `LICENSE`、`LICENSE-AUXILIARY` 和构建时导出的 `THIRD_PARTY_NOTICES`。构建参数 `DEXSQL_VERSION`、`DEXSQL_SHA256_AMD64`、`DEXSQL_SHA256_ARM64` 必须配套更新。
 
 Frida CLI 同样支持任意目录调用，无需激活 Python 环境：
 
@@ -420,20 +420,20 @@ profile 位于 `$DSH_HOME/profiles/<name>/`，而 `$DSH_HOME` 是**挂载卷**�
 
 ### 默认插件与升级
 
-镜像和两份 Compose 的默认列表包含 LAN 插件和本地 DexSQL MCP bundle：
+镜像和两份 Compose 的默认列表包含 LAN 插件和 npm 发布的 DexSQL MCP bundle：
 
 | 插件 | 版本 | 用途 |
 |---|---|---|
 | `@lolkda/dsh-web-lan` | `@latest`：每次启动重新解析 registry 最新发布 | Web 局域网访问与相关设置 |
-| `@local/dsh-dexsql-mcp` | 本地 bundle，随镜像内置 | 自动注入 `dexsql-mcp` 配置，暴露 `mcp__dexsql__*` 工具 |
+| `@lolkda/dsh-dexsql-mcp` | `@latest`：npm 配置型 bundle | 自动注入 `dexsql-mcp` 配置，暴露 `mcp__dexsql__*` 工具 |
 
-本地 bundle 位于镜像的 `/opt/dsh-bundles/dsh-dexsql-mcp`，通过 `link:` 安装。它只负责 MCP 配置，不包含 DexSQL 二进制；二进制在镜像层 `/opt/dexsql/<version>/dexsql`。
+DexSQL bundle 从 npm 安装，默认使用官方 registry（`DSH_PLUGIN_REGISTRY`）。它只负责 MCP 配置，不包含 DexSQL 二进制；二进制在镜像层 `/opt/dexsql/<version>/dexsql`，仍由 `DEXSQL_VERSION` 和 SHA-256 固定。
 
 **`dsh-auto-thinking-levels` 已从默认列表移除**：当前镜像锁定的 DSH 版本在 `llm-pi-ai` 的模型目录里自带完整的 `reasoningEfforts`，不再需要插件补档位。旧容器或部署面板残留的 `DSH_PLUGINS` 覆盖值若还带着它，插件仍会照常安装；要彻底清掉，先从环境变量里删掉，再在容器内执行 `dsh plugin --profile web remove dsh-auto-thinking-levels`，已登记的 bundle 条目会随依赖一起清理。
 
-默认插件写成 `@lolkda/dsh-web-lan@latest`，不锁具体版本号。它独立于镜像发版（写这份说明时 registry 上 web-lan 是 `0.4.0`，镜像不锁版本）：锁死版本意味着插件发新版后，只拉镜像、只重启容器都不会更新，只能改 `DSH_PLUGINS` 重建镜像。**只写包名、不带 `@latest` 并不够**：pnpm 对 profile 里已登记的依赖会沿用原 spec，不会重新解析 latest —— 实测把依赖写死 `0.1.1` 后再跑 `pnpm add @lolkda/dsh-web-lan`，装的仍是 `0.1.1`（此时 registry latest 已是 `0.4.0`）。要"每次启动都跟最新"，spec 必须显式带 `@latest`。
+默认插件都写成 `@latest`，不锁具体版本号。它们独立于镜像发版：锁死版本意味着插件发新版后，只拉镜像、只重启容器都不会更新，只能改 `DSH_PLUGINS` 重建镜像。**只写包名、不带 `@latest` 并不够**：pnpm 对 profile 里已登记的依赖会沿用原 spec，不会重新解析 latest —— 实测把 web-lan 依赖写死 `0.1.1` 后再跑 `pnpm add @lolkda/dsh-web-lan`，装的仍是 `0.1.1`（此时 registry latest 已是 `0.4.0`）。要"每次启动都跟最新"，spec 必须显式带 `@latest`。
 
-DexSQL 本地 bundle 不跟随 registry：`link:/opt/dsh-bundles/dsh-dexsql-mcp` 指向镜像内固定内容，版本由 `DEXSQL_VERSION` 控制。它只提供 MCP 配置，DexSQL 二进制本体仍由 Dockerfile 下载并校验。
+`DSH_PLUGIN_REGISTRY` 只作用于 `DSH_PLUGINS` 的安装，默认 `https://registry.npmjs.org`。新发布的 DexSQL bundle 不保证已同步到国内镜像，所以插件安装默认走官方源；用户项目的 `npm` / `pnpm` 依赖仍走 `NPM_REGISTRY` / `npm_config_registry`。镜像里仍保留 DexSQL 二进制的 `DEXSQL_VERSION` 与 SHA-256 固定，二进制本身不由 npm 包提供。
 
 **入口会关掉 pnpm 的新版本成熟期**（[entrypoint.sh](entrypoint.sh) 里 `PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）。pnpm 12 自带 24 小时 `minimumReleaseAge`（默认 1440 分钟），会把"刚发布、还不够成熟"的版本回退到上一个成熟版本 —— 实测 web-lan `0.2.0` 发布 3 小时时，裸装解析到的仍是 `0.1.1`。要求"装最新"就得绕开它，否则 `@latest` 实际等价于"一天前的最新版"。这个覆盖只作用于 `DSH_PLUGINS` 的安装命令，容器里用户项目的 pnpm 安装仍走 pnpm 自己的默认策略。
 
@@ -446,10 +446,10 @@ DexSQL 本地 bundle 不跟随 registry：`link:/opt/dsh-bundles/dsh-dexsql-mcp`
 在 [compose.yml](compose.yml) 中覆盖 `DSH_PLUGINS`（空格分隔，需要额外插件时追加到末尾；要跟最新写 `@latest`，要可复现写具体版本号）：
 
 ```yaml
-DSH_PLUGINS: "@lolkda/dsh-web-lan@latest link:/opt/dsh-bundles/dsh-dexsql-mcp"
+DSH_PLUGINS: "@lolkda/dsh-web-lan@latest @lolkda/dsh-dexsql-mcp@latest"
 ```
 
-如果不需要 DexSQL MCP，覆盖 `DSH_PLUGINS` 时去掉 `link:/opt/dsh-bundles/dsh-dexsql-mcp` 即可；只保留 `@lolkda/dsh-web-lan@latest` 就不会加载 `dexsql-mcp`。
+如果不需要 DexSQL MCP，覆盖 `DSH_PLUGINS` 时去掉 `@lolkda/dsh-dexsql-mcp@latest` 即可；只保留 `@lolkda/dsh-web-lan@latest` 就不会加载 `dexsql-mcp`。需要让插件安装也走国内镜像时，设置 `DSH_PLUGIN_REGISTRY=https://registry.npmmirror.com`；前提是镜像站已经同步了对应版本。
 
 升级旧容器时必须重新创建容器。若部署面板或旧配置保留了原来的 `DSH_PLUGINS` 环境变量，请清除覆盖值或改为上面的新列表；只拉取镜像、只重启旧容器不会更新已经保存的环境变量。启动用户固定为 `0:0`，入口和主程序全程使用 root，不再降权。
 
@@ -494,6 +494,8 @@ docker compose build --build-arg JDK_VERSION=25
 | Yarn Classic | `https://registry.npmmirror.com` | `YARN_REGISTRY` |
 | pip | `https://mirrors.aliyun.com/pypi/simple/` | `PIP_INDEX_URL` |
 | uv | `https://mirrors.aliyun.com/pypi/simple/` | `UV_DEFAULT_INDEX` |
+
+DSH 插件安装源单独由 `DSH_PLUGIN_REGISTRY` 控制，默认 `https://registry.npmjs.org`，不受 `NPM_REGISTRY` 影响。这样用户项目依赖仍可走国内镜像，而新发布的 DexSQL bundle 不需要等镜像站同步。
 
 **工具链构建与运行时依赖源分开。** 镜像内固定版本的 DSH、pnpm、uv 等仍从官方源构建；国内源在最后作为运行时默认值写入镜像。原因是镜像站存在同步延迟，实际遇到过阿里云 PyPI 缺少 `uv==0.12.17`，不能因此让构建失败或降低工具版本。日常安装若遇到镜像缺包，也可显式切回官方源，不会静默换源。
 
@@ -640,7 +642,7 @@ dist-tag 会变化，且不保证指向所需的预发布版本。镜像通过 `
 ## 已知缺口
 
 - **容器里的 profile 是全新的空 profile。** 宿主 `~/.dsh/profiles/web` 里的东西（dshmarket、prompt-manager、skills-manager、`link:` 装的本地插件）不会自动跟过来，只有 `DSH_PLUGINS` 里列的会装。要带全套得另做 seed。
-- **MCP 服务器同理**：它们注册在 profile 的 `cordis.patch.yml` 里，不在容器里。而且 `ida` / `reqable` 是 Windows 宿主上的应用，本来就带不过来；`fastctx` 是纯文件/shell，可以。本仓库内置的 DexSQL 是例外：二进制和本地 bundle 都在镜像内，首次启动自动注册。
+- **MCP 服务器同理**：它们注册在 profile 的 `cordis.patch.yml` 里，不在容器里。而且 `ida` / `reqable` 是 Windows 宿主上的应用，本来就带不过来；`fastctx` 是纯文件/shell，可以。DexSQL 是例外：二进制在镜像内，MCP 配置由 npm 包 `@lolkda/dsh-dexsql-mcp` 在首次启动时自动注册。
 - **`adb` 只有命令本身，默认没有 USB 透传。** 容器未映射宿主 USB 设备，也没装 udev 规则推荐包，真机调试的 udev 授权与设备映射由使用者在宿主侧按需处理；默认 compose 不为此扩大权限。详见 [ADB（Android 调试桥）](#adbandroid-调试桥)。
 - 默认没有 docker 访问能力，容器内不能 `docker build` / `docker compose up`。
 - 默认只支持 `amd64` / `arm64`，其他架构会在 Java / Go 那两步显式报错退出。
@@ -658,7 +660,7 @@ sh -n cli-env.sh
 node --check home-init.mjs
 ```
 
-Linux 测试机上补跑 `sudo env PATH="$PATH" bash tests/entrypoint.test.sh` 和 `sudo env PATH="$PATH" node --test tests/*.test.mjs`；只操作隔离 fixture，不应对真实工作区运行入口。[CLI 回归测试](tests/entrypoint.test.sh) 实际执行 root 入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[DexSQL 回归](tests/dexsql.test.mjs) 校验二进制版本/架构校验和、许可证、MCP bundle 配置和默认插件注入；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置测试可在 Git Bash 运行，root-only 入口验收需要 Linux。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
+Linux 测试机上补跑 `sudo env PATH="$PATH" bash tests/entrypoint.test.sh` 和 `sudo env PATH="$PATH" node --test tests/*.test.mjs`；只操作隔离 fixture，不应对真实工作区运行入口。[CLI 回归测试](tests/entrypoint.test.sh) 实际执行 root 入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[DexSQL 回归](tests/dexsql.test.mjs) 校验二进制版本/架构校验和、许可证、npm bundle 的 `@latest` 默认注入和插件源隔离；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置测试可在 Git Bash 运行，root-only 入口验收需要 Linux。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
 
 Linux + Docker 下的快速权限验收：
 

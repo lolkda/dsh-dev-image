@@ -41,6 +41,7 @@ setup_case() {
     export DSH_PLUGINS=''
     export DSH_PLUGINS_REQUIRED=1
     unset AGENT_UID AGENT_GID DSH_ENTRYPOINT_DROPPED PLUGIN_EXIT PLUGIN_ENV
+    unset DSH_PLUGIN_REGISTRY
     unset PNPM_CONFIG_MINIMUM_RELEASE_AGE
     unset CARGO_HOME GOPATH GOMODCACHE GOCACHE PIP_CACHE_DIR npm_config_cache
     unset MAVEN_CONFIG GRADLE_USER_HOME UV_CACHE_DIR
@@ -108,6 +109,24 @@ maturity_cutoff_override_stays_out_of_the_command() {
     export DSH_PLUGINS='@example/plugin@1.0.0'
     bash "$ROOT/entrypoint.sh" bash -c 'printf "%s" "${PNPM_CONFIG_MINIMUM_RELEASE_AGE-unset}" > "$APP_DIR/command-env"'
     test "$(< "$APP_DIR/command-env")" = unset
+}
+
+plugin_install_uses_configured_registry() {
+    setup_case
+    export DSH_PLUGINS='@example/plugin@1.0.0'
+    export DSH_PLUGIN_REGISTRY='https://registry.npmjs.org'
+    bash "$ROOT/entrypoint.sh" true
+    test "$(tail -n 1 "$CALLS")" = '--registry=https://registry.npmjs.org'
+}
+
+invalid_plugin_registry_is_rejected() {
+    setup_case
+    export DSH_PLUGIN_REGISTRY='not-a-url'
+    if bash "$ROOT/entrypoint.sh" true > "$CASE_DIR/output" 2>&1; then
+        printf 'Expected an invalid plugin registry to fail\n' >&2
+        return 1
+    fi
+    test ! -s "$CALLS"
 }
 
 removed_identity_override_is_rejected() {
@@ -237,6 +256,8 @@ run_case 'optional plugin failure allows command execution' optional_plugin_fail
 run_case 'preserve literal plugin specs instead of expanding globs' plugin_specs_do_not_expand_globs
 run_case 'install plugins without the pnpm maturity cutoff' plugin_install_ignores_the_maturity_cutoff
 run_case 'keep the maturity cutoff override out of the main command' maturity_cutoff_override_stays_out_of_the_command
+run_case 'pass the configured plugin registry to dsh plugin' plugin_install_uses_configured_registry
+run_case 'reject an invalid plugin registry before installing plugins' invalid_plugin_registry_is_rejected
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 ((failed == 0))

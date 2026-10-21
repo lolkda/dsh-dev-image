@@ -280,9 +280,6 @@ RUN set -eux; \
     test "$(dexsql --version)" = "dexsql ${DEXSQL_VERSION}"; \
     dexsql mcp --help >/dev/null
 
-# DSH 本地 bundle：把 DexSQL MCP 配置作为默认插件注入，不修改用户 profile。
-COPY bundles/dsh-dexsql-mcp /opt/dsh-bundles/dsh-dexsql-mcp
-
 # -----------------------------------------------------------------------------
 # Maven —— 走官方 tarball，理由和 Gradle 不同
 #
@@ -536,10 +533,11 @@ RUN set -eux; \
 # entrypoint 会跳过插件登记，dsh 就绑 127.0.0.1，外面完全连不上 —— 典型的
 # "看起来起来了但用不了"。想关掉就显式 `-e DSH_PLUGINS=`（空值会被尊重）。
 #
-# 默认插件包含两项：web-lan 写 `@latest` 跟随 registry；DexSQL 是镜像内的本地
-# bundle，用 `link:` 安装，版本由 Dockerfile 的 DEXSQL_VERSION 固定。只写包名
-# （不带 @latest）时 pnpm 会沿用 profile 里已登记的 spec，重启不会升级；web-lan
-# 要每次跟最新就必须显式带 @latest。要固定或关闭某项就覆盖 DSH_PLUGINS。
+# 默认插件包含两项，均写 `@latest` 跟随 registry；只写包名（不带 @latest）时
+# pnpm 会沿用 profile 里已登记的 spec，重启不会升级。要固定或关闭某项就覆盖
+# DSH_PLUGINS。DexSQL 二进制仍由 DEXSQL_VERSION 固定并校验 SHA。
+# DSH_PLUGIN_REGISTRY 只作用于插件安装，默认官方 npm：新发布的 bundle 不保证
+# 已同步到国内镜像；需要走镜像时显式覆盖它。用户项目依赖仍使用上面的国内镜像。
 #
 # CMD 设成 dsh web，所以 `docker run <image>` 开箱即用；要 shell 就
 # `docker run -it <image> bash`（参数会覆盖 CMD）。
@@ -572,7 +570,8 @@ ENV HOME=/app/.home \
     GOBIN=/app/.home/.local/bin \
     PNPM_CONFIG_STORE_DIR=/app/.cache/pnpm-store \
     PATH=/app/.home/.local/bin:/app/.home/.local/share/pnpm/bin:${PATH}:/app/.home/bin \
-    DSH_PLUGINS="@lolkda/dsh-web-lan@latest link:/opt/dsh-bundles/dsh-dexsql-mcp"
+    DSH_PLUGIN_REGISTRY=https://registry.npmjs.org \
+    DSH_PLUGINS="@lolkda/dsh-web-lan@latest @lolkda/dsh-dexsql-mcp@latest"
 
 USER 0:0
 WORKDIR /app

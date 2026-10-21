@@ -7,7 +7,7 @@ import { test } from 'node:test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const dockerfile = read('Dockerfile');
-const defaultPlugins = '@lolkda/dsh-web-lan@latest link:/opt/dsh-bundles/dsh-dexsql-mcp';
+const defaultPlugins = '@lolkda/dsh-web-lan@latest @lolkda/dsh-dexsql-mcp@latest';
 
 test('image defaults contain the shared plugin list', () => {
   const expression = dockerfile.match(/^\s*DSH_PLUGINS=(.+)$/m)?.[1];
@@ -31,6 +31,27 @@ for (const [path, source] of pluginDefaults) {
     assert.doesNotMatch(source, pinnedSpecs);
   });
 }
+
+test('plugin installation defaults to the official npm registry and stays overridable', () => {
+  assert.match(dockerfile, /DSH_PLUGIN_REGISTRY=https:\/\/registry\.npmjs\.org/);
+  for (const path of ['compose.yml', 'compose.bridge.yml']) {
+    const source = read(path);
+    assert.match(source, /DSH_PLUGIN_REGISTRY: \$\{DSH_PLUGIN_REGISTRY-https:\/\/registry\.npmjs\.org\}/);
+    const expression = source.match(/^\s+DSH_PLUGIN_REGISTRY:\s*(.+)$/m)?.[1];
+    assert.ok(expression, `${path}: missing DSH_PLUGIN_REGISTRY expression`);
+    for (const [value, expected] of [[undefined, 'https://registry.npmjs.org'], ['', '']]) {
+      const env = { ...process.env };
+      delete env.DSH_PLUGIN_REGISTRY;
+      if (value !== undefined) env.DSH_PLUGIN_REGISTRY = value;
+      const result = spawnSync('bash', ['--noprofile', '--norc', '-c', `printf '%s' "${expression}"`], {
+        cwd: root, env, encoding: 'utf8', timeout: 10_000,
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, expected, `${path}: DSH_PLUGIN_REGISTRY=${JSON.stringify(value) ?? 'unset'}`);
+    }
+  }
+});
 
 // 这些是轻量配置 contract；真实权限、YAML 展开和完整镜像另在 Docker CI 中验证。
 for (const path of ['compose.yml', 'compose.bridge.yml']) {

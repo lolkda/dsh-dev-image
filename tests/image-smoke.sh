@@ -164,9 +164,10 @@ main() {
         const profile = `${process.env.DSH_HOME}/profiles/web`;
         const pkg = JSON.parse(fs.readFileSync(`${profile}/package.json`, "utf8"));
         // 默认插件写 @latest，镜像装的必须是 registry 当前的 latest；写死具体版本号
-        // 只会放过"镜像里还是旧插件"的情况。查询走镜像内的 registry 配置，与安装同源。
-        for (const name of ["@lolkda/dsh-web-lan"]) {
-            const expected = execFileSync("npm", ["view", name, "version"], { encoding: "utf8" }).trim();
+        // 只会放过"镜像里还是旧插件"的情况。查询走插件安装源，与安装同源。
+        const registry = process.env.DSH_PLUGIN_REGISTRY || "https://registry.npmjs.org";
+        for (const name of ["@lolkda/dsh-web-lan", "@lolkda/dsh-dexsql-mcp"]) {
+            const expected = execFileSync("npm", ["view", name, "version", "--registry", registry], { encoding: "utf8" }).trim();
             assert.match(expected, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, "unexpected registry answer for " + name + ": " + expected);
             assert.ok(pkg.dependencies?.[name], name + " is missing from dependencies");
             assert.ok(pkg.dsh?.profile?.bundles?.includes(name), name + " is not registered as a bundle");
@@ -174,9 +175,6 @@ main() {
             assert.equal(installed.version, expected, name + ": installed " + installed.version + ", expected latest " + expected);
             console.log("Verified plugin: " + name + "@" + installed.version);
         }
-        const dexsqlBundle = "@local/dsh-dexsql-mcp";
-        assert.ok(pkg.dependencies?.[dexsqlBundle], dexsqlBundle + " is missing from dependencies");
-        assert.ok(pkg.dsh?.profile?.bundles?.includes(dexsqlBundle), dexsqlBundle + " is not registered as a bundle");
         assert.equal(process.getuid(), 0);
         assert.equal(process.getgid(), 0);
     '

@@ -47,6 +47,9 @@ read -r -a plugins <<< "${plugin_specs//$'\n'/ }"
 for spec in "${plugins[@]}"; do
     [[ "$spec" != -* ]] || fatal "插件 spec 不能是包管理器选项：$spec"
 done
+plugin_registry="${DSH_PLUGIN_REGISTRY:-}"
+[[ -z "$plugin_registry" || "$plugin_registry" =~ ^https?://[^[:space:]]+$ ]] \
+    || fatal "DSH_PLUGIN_REGISTRY 必须是 http(s) URL：$plugin_registry"
 
 permission_error() {
     fatal "目录不可写：$1（运行身份 root 0:0）。检查只读挂载、宿主 ACL/NFS root-squash、用户命名空间及 DAC_OVERRIDE/FOWNER；不要用 DSH_PLUGINS_REQUIRED=0 掩盖权限错误。"
@@ -91,9 +94,12 @@ cd -- "$APP_DIR" || permission_error "$APP_DIR"
 log "以 root (0:0) 启动，HOME=$HOME"
 
 # pnpm 12 默认 24h 成熟期只在插件安装时关闭，用户项目仍用自己的默认策略。
+# 插件源可独立于用户项目的 npm 源；明确传 --registry，避免 pnpm 读取别的配置。
 for spec in "${plugins[@]}"; do
-    log "dsh plugin --profile $profile add $spec"
-    if ! PNPM_CONFIG_MINIMUM_RELEASE_AGE=0 dsh plugin --profile "$profile" add "$spec"; then
+    plugin_args=(plugin --profile "$profile" add "$spec")
+    [[ -z "$plugin_registry" ]] || plugin_args+=(--registry="$plugin_registry")
+    log "dsh ${plugin_args[*]}"
+    if ! PNPM_CONFIG_MINIMUM_RELEASE_AGE=0 dsh "${plugin_args[@]}"; then
         if [[ "${DSH_PLUGINS_REQUIRED:-1}" == 1 ]]; then
             fatal "插件安装失败：$spec。只有允许缺少插件时才设 DSH_PLUGINS_REQUIRED=0；检查上方原始错误。"
         fi

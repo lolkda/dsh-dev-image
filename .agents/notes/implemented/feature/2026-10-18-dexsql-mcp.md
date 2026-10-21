@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> Superseded by [2026-10-21 npm bundle migration](2026-10-21-dexsql-npm-package.md).
+
 ## Problem
 
 镜像已经有 apktool、adb、frida，但 APK/DEX 的类、方法、字符串和调用关系仍需要额外装工具。DexSQL 同时提供 CLI 和 stdio MCP；如果只装二进制，用户还要手动改 profile 才能让 agent 使用 MCP，不符合“镜像内置后直接可用”的目标。
