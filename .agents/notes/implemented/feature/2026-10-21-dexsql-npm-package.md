@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 本笔记中“DexSQL 二进制仍由 Dockerfile 下载”的部分已被 [2026-10-22 移除镜像内置二进制](2026-10-22-dexsql-image-binary-removal.md) 取代；插件从 0.2.0 起自带 launcher 和六平台二进制。
+
 ## Problem
 
 原先把 `@local/dsh-dexsql-mcp` 作为本地 bundle 复制进镜像，再用 `link:/opt/dsh-bundles/dsh-dexsql-mcp` 安装。这个 bundle 的配置和版本跟镜像强绑定，其他 DSH 部署无法复用；要改 MCP 参数还必须重建镜像。
@@ -14,7 +16,7 @@ Status: implemented
 @lolkda/dsh-web-lan@latest @lolkda/dsh-dexsql-mcp@latest
 ```
 
-DexSQL 二进制仍由 Dockerfile 下载，继续由 `DEXSQL_VERSION` 和 `DEXSQL_SHA256_*` 固定；npm 包只提供 `@deepseek-ai/dsh-mcp-client` 的配置，不包含二进制。
+DexSQL 二进制当时仍由 Dockerfile 下载，继续由 `DEXSQL_VERSION` 和 `DEXSQL_SHA256_*` 固定；npm 包只提供 `@deepseek-ai/dsh-mcp-client` 的配置，不包含二进制。该二进制安装决定已被[后续改动](2026-10-22-dexsql-image-binary-removal.md)取代。
 
 新增 `DSH_PLUGIN_REGISTRY`，只传给 `dsh plugin add --registry`，默认 `https://registry.npmjs.org`。这是因为新发布的 bundle 不保证已同步到国内镜像；用户项目的 npm/pnpm 依赖仍使用 `NPM_REGISTRY` / `npm_config_registry`，两者不混用。显式设置 `DSH_PLUGIN_REGISTRY=` 可以关闭该参数，沿用 pnpm 自身配置。
 
@@ -31,4 +33,4 @@ DexSQL 二进制仍由 Dockerfile 下载，继续由 `DEXSQL_VERSION` 和 `DEXSQ
 
 ## Consequences
 
-首次启动需要能访问 npm 官方源；离线环境仍需 `DSH_PLUGINS_REQUIRED=0` 或预置 profile 缓存。`@latest` 与 `PNPM_CONFIG_MINIMUM_RELEASE_AGE=0` 的组合意味着同一镜像在不同时间启动可能拿到不同 bundle 版本；需要可复现时在 `DSH_PLUGINS` 写死版本。DexSQL 二进制仍随镜像固定，npm 包升级不会自动更换二进制。
+首次启动需要能访问 npm 官方源；离线环境仍需 `DSH_PLUGINS_REQUIRED=0` 或预置 profile 缓存。`@latest` 与 `PNPM_CONFIG_MINIMUM_RELEASE_AGE=0` 的组合意味着同一镜像在不同时间启动可能拿到不同 bundle 版本；需要可复现时在 `DSH_PLUGINS` 写死版本。DexSQL 二进制当时仍随镜像固定，npm 包升级不会自动更换二进制；该限制已由[后续改动](2026-10-22-dexsql-image-binary-removal.md)消除。

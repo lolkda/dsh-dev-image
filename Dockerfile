@@ -42,11 +42,6 @@ ARG FRIDA_VERSION=17.23.1
 ARG FRIDA_TOOLS_VERSION=14.11.0
 ARG APKTOOL_VERSION=2.12.1
 ARG APKTOOL_SHA256=66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa
-ARG DEXSQL_VERSION=0.1.1
-ARG DEXSQL_SHA256_AMD64=f35c57610fcee62864e68f12e51997621375c025447aa2f32a0be9eb2df464bc
-ARG DEXSQL_SHA256_ARM64=8095a4acafbfda3c4d502423f185c28063132b2fb3b11489aba7ee2fe2dcd13f
-ARG DEXSQL_LICENSE_SHA256=a5e8ba355d3bbc08a1de333b93cfaadff62c1b335454930c3bc8163d710b5a30
-ARG DEXSQL_LICENSE_AUXILIARY_SHA256=91c80095437ed20c2dca7758f63f03e15eedb46aa4854577b5df20c788ecc514
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -250,35 +245,6 @@ COPY apktool.sh /usr/local/bin/apktool
 RUN set -eux; \
     chmod 0755 /usr/local/bin/apktool; \
     test "$(apktool --version)" = "$APKTOOL_VERSION"
-
-# -----------------------------------------------------------------------------
-# DexSQL —— 单文件 APK/DEX SQL 引擎，同时提供 CLI 和 stdio MCP。
-# 固定版本 + 每架构 SHA-256；许可证要求随二进制保留完整 LICENSE 和第三方 notices。
-# -----------------------------------------------------------------------------
-RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
-    case "$arch" in \
-        amd64) dexsql_sha="$DEXSQL_SHA256_AMD64" ;; \
-        arm64) dexsql_sha="$DEXSQL_SHA256_ARM64" ;; \
-        *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
-    esac; \
-    install_dir="/opt/dexsql/${DEXSQL_VERSION}"; \
-    mkdir -p "$install_dir"; \
-    curl -fsSL -o "$install_dir/dexsql" \
-        "https://github.com/LSPosed/dexsql-release/releases/download/v${DEXSQL_VERSION}/dexsql-linux-${arch}"; \
-    echo "$dexsql_sha  $install_dir/dexsql" | sha256sum -c -; \
-    chmod 0755 "$install_dir/dexsql"; \
-    ln -sfn "$install_dir/dexsql" /usr/local/bin/dexsql; \
-    curl -fsSL -o "$install_dir/LICENSE" \
-        "https://github.com/LSPosed/dexsql-release/releases/download/v${DEXSQL_VERSION}/LICENSE"; \
-    echo "${DEXSQL_LICENSE_SHA256}  $install_dir/LICENSE" | sha256sum -c -; \
-    curl -fsSL -o "$install_dir/LICENSE-AUXILIARY" \
-        "https://github.com/LSPosed/dexsql-release/releases/download/v${DEXSQL_VERSION}/LICENSE-AUXILIARY"; \
-    echo "${DEXSQL_LICENSE_AUXILIARY_SHA256}  $install_dir/LICENSE-AUXILIARY" | sha256sum -c -; \
-    "$install_dir/dexsql" extract licenses --output "$install_dir/THIRD_PARTY_NOTICES"; \
-    test -s "$install_dir/THIRD_PARTY_NOTICES"; \
-    test "$(dexsql --version)" = "dexsql ${DEXSQL_VERSION}"; \
-    dexsql mcp --help >/dev/null
 
 # -----------------------------------------------------------------------------
 # Maven —— 走官方 tarball，理由和 Gradle 不同
@@ -498,7 +464,6 @@ RUN set -eux; \
              gh --version; gdb --version; strace -V; \
              adb version; \
               (cd /tmp && apktool --version); \
-              (cd /tmp && dexsql --version && dexsql mcp --help >/dev/null); \
               (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null); \
              for c in xxd file tree nc dig ss lsof bc man; do command -v "$c" >/dev/null; done; \
              dsh --help > /dev/null'; \
@@ -535,7 +500,8 @@ RUN set -eux; \
 #
 # 默认插件包含两项，均写 `@latest` 跟随 registry；只写包名（不带 @latest）时
 # pnpm 会沿用 profile 里已登记的 spec，重启不会升级。要固定或关闭某项就覆盖
-# DSH_PLUGINS。DexSQL 二进制仍由 DEXSQL_VERSION 固定并校验 SHA。
+# DSH_PLUGINS。DexSQL 二进制由 `@lolkda/dsh-dexsql-mcp` 自带并安装进 profile，
+# 镜像不再单独下载或链接全局 `dexsql`。
 # DSH_PLUGIN_REGISTRY 只作用于插件安装，默认官方 npm：新发布的 bundle 不保证
 # 已同步到国内镜像；需要走镜像时显式覆盖它。用户项目依赖仍使用上面的国内镜像。
 #

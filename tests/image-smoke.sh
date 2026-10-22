@@ -47,16 +47,20 @@ main() {
             test "$HOME" = /app/.home
             test "$(getent passwd root | cut -d: -f6)" = "$HOME"
             test -d "$HOME" && test ! -L "$HOME"
-            for tool in frida frida-ps frida-trace frida-ls-devices apktool adb dexsql python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
+            for tool in frida frida-ps frida-trace frida-ls-devices apktool adb python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
                         git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
                 command -v "$tool" >/dev/null
             done
+            if command -v dexsql >/dev/null 2>&1; then
+                echo "image unexpectedly provides a global dexsql" >&2
+                exit 1
+            fi
+            test ! -e /opt/dexsql
             # adb 只要求 CLI：在 subshell 内先切到 /tmp 再调用，证明不依赖工具目录、alias、
             # 交互 shell 或入口对 PATH 的额外处理。entrypoint.sh 会无条件 cd "$APP_DIR"，
             # 所以给 docker run 加 --workdir 并不足以证明"任意目录"，必须在这里自己切；
             # 用 subshell 是为了不改动本块其余断言（pnpm store / cargo build）依赖的 cwd。
             (cd /tmp && apktool --version)
-            (cd /tmp && dexsql --version && dexsql mcp --help >/dev/null)
             (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null)
             adb_from_tmp="$(cd /tmp && test "$PWD" = /tmp && adb version)"
             printf "Verified adb CLI from /tmp: %s\n" "$adb_from_tmp"
@@ -175,6 +179,19 @@ main() {
             assert.equal(installed.version, expected, name + ": installed " + installed.version + ", expected latest " + expected);
             console.log("Verified plugin: " + name + "@" + installed.version);
         }
+        // 镜像不再安装全局 dexsql；二进制必须由 DexSQL 插件连 launcher 一起装进 profile。
+        const dexsqlRoot = profile + "/node_modules/@lolkda/dsh-dexsql-mcp";
+        const dexsqlPkg = JSON.parse(fs.readFileSync(dexsqlRoot + "/package.json", "utf8"));
+        assert.ok(dexsqlPkg.bin?.dexsql, "DexSQL plugin does not expose a launcher");
+        const target = process.platform + "-" + process.arch;
+        const binaryName = process.platform === "win32" ? "dexsql.exe" : "dexsql";
+        const bundledBinary = dexsqlRoot + "/vendor/" + target + "/" + binaryName;
+        assert.ok(fs.existsSync(bundledBinary), "DexSQL plugin is missing " + bundledBinary);
+        const launcher = dexsqlRoot + "/" + dexsqlPkg.bin.dexsql;
+        const version = execFileSync(process.execPath, [launcher, "--version"], { encoding: "utf8" }).trim();
+        assert.match(version, /^dexsql \d+\.\d+\.\d+$/, "unexpected bundled DexSQL version: " + version);
+        execFileSync(process.execPath, [launcher, "mcp", "--help"], { stdio: "ignore" });
+        console.log("Verified plugin-bundled DexSQL: " + version);
         assert.equal(process.getuid(), 0);
         assert.equal(process.getgid(), 0);
     '
@@ -187,8 +204,6 @@ main() {
         | grep -i "^Android Debug Bridge version " >/dev/null
     printf 'Verified adb CLI over bare docker exec from /tmp\n'
     docker exec --workdir /tmp "$web_id" apktool --version
-    docker exec --workdir /tmp "$web_id" dexsql --version
-    docker exec --workdir /tmp "$web_id" dexsql mcp --help >/dev/null
     docker exec --workdir /tmp "$web_id" frida --version
     for tool in frida-ps frida-trace frida-ls-devices; do
         docker exec --workdir /tmp "$web_id" "$tool" --help >/dev/null

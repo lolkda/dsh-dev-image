@@ -3,6 +3,7 @@
 Status: implemented
 
 > Superseded by [2026-10-21 npm bundle migration](2026-10-21-dexsql-npm-package.md).
+> 镜像内置 DexSQL 二进制的部分进一步由 [2026-10-22 移除镜像内置二进制](2026-10-22-dexsql-image-binary-removal.md) 取代。
 
 ## Problem
 
