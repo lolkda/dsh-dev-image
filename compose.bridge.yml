@@ -31,10 +31,10 @@ services:
       PIP_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
       UV_DEFAULT_INDEX: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
       DSH_PROFILE: ${DSH_PROFILE:-web}
-      # 插件源独立于用户项目依赖源；新发布的 DexSQL bundle 不保证已在镜像站同步。
+      # 插件源独立于用户项目依赖源；新发布的插件不保证已在镜像站同步。
       DSH_PLUGIN_REGISTRY: ${DSH_PLUGIN_REGISTRY-https://registry.npmjs.org}
-      # web-lan 和 DexSQL 都写 @latest，每次启动重新解析 registry。
-      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan@latest @lolkda/dsh-dexsql-mcp@latest}
+      # web-lan 写 @latest，每次启动重新解析 registry。
+      DSH_PLUGINS: ${DSH_PLUGINS-@lolkda/dsh-web-lan@latest}
       DSH_PLUGINS_REQUIRED: ${DSH_PLUGINS_REQUIRED:-1}
       DSH_WEB_TRUSTED_HOSTS: ${DSH_HOST:-127.0.0.1}
 

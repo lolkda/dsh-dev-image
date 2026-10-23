@@ -22,14 +22,14 @@
 # =============================================================================
 
 # ---- 运行时来源层：只用于 COPY，不进入最终镜像 ------------------------------
-FROM node:24-bookworm-slim      AS src-node
+FROM node:24.22.1-bookworm-slim AS src-node
 FROM rust:1.98.1-slim-bookworm  AS src-rust
 
 # ---- 最终镜像 ---------------------------------------------------------------
 FROM python:3.12-slim-bookworm
 
 ARG GO_VERSION=1.27.1
-ARG JDK_VERSION=24
+ARG JDK_VERSION=25
 ARG DSH_VERSION=0.2.1-rc.2
 ARG PNPM_VERSION=12.4.2
 ARG TYPESCRIPT_VERSION=7.0.2
@@ -165,7 +165,7 @@ RUN set -eux; \
     chmod 0644 /etc/profile.d/00-dsh-path.sh
 
 # -----------------------------------------------------------------------------
-# Node 24
+# Node 24.22.1
 #
 # 逐路径 COPY，不用 `COPY --from=src-node /usr/local /usr/local`：
 # 整目录拷贝会覆盖掉 base 里 python 的 /usr/local/lib 和 /usr/local/bin。
@@ -206,11 +206,12 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # Java —— 走 Adoptium 官方 tarball，不用 COPY
 #
-# 为什么不用 eclipse-temurin：24 这个版本只有 noble 变体，`24-jdk-jammy` 已 404。
-# noble 的 glibc 是 2.39 > base 的 2.36，COPY 进来会炸。
+# 为什么不用 eclipse-temurin：它的 Debian 变体跟随发行版，JDK 24 时期只有
+# noble 变体（`24-jdk-jammy` 已 404），noble 的 glibc 是 2.39 > base 的 2.36，
+# COPY 进来会炸。Adoptium 的 Linux tarball 面向 glibc 2.17+ 构建，放进
+# bookworm 安全，换 JDK_VERSION 时 base 完全不用动。
 #
-# Adoptium 的 Linux tarball 面向 glibc 2.17+ 构建，放进 bookworm 安全；换
-# JDK_VERSION=25 / 26 时 base 完全不用动，比 COPY 路线省事。
+# 默认 JDK 25（LTS）。24 是 non-LTS 且已 EOL；26 / 27 也按需可换。
 #
 # 用 API 返回的 sha256 校验后再解包，保证构建可复现（不是盲下 tar）。
 # 架构用 dpkg 探测而不是 TARGETARCH，这样不开 BuildKit 也不会拿错架构。
@@ -498,10 +499,9 @@ RUN set -eux; \
 # entrypoint 会跳过插件登记，dsh 就绑 127.0.0.1，外面完全连不上 —— 典型的
 # "看起来起来了但用不了"。想关掉就显式 `-e DSH_PLUGINS=`（空值会被尊重）。
 #
-# 默认插件包含两项，均写 `@latest` 跟随 registry；只写包名（不带 @latest）时
-# pnpm 会沿用 profile 里已登记的 spec，重启不会升级。要固定或关闭某项就覆盖
-# DSH_PLUGINS。DexSQL 二进制由 `@lolkda/dsh-dexsql-mcp` 自带并安装进 profile，
-# 镜像不再单独下载或链接全局 `dexsql`。
+# 默认插件只有 web-lan 一项，写 `@latest` 跟随 registry；只写包名（不带 @latest）
+# 时 pnpm 会沿用 profile 里已登记的 spec，重启不会升级。要固定或关闭就覆盖
+# DSH_PLUGINS。
 # DSH_PLUGIN_REGISTRY 只作用于插件安装，默认官方 npm：新发布的 bundle 不保证
 # 已同步到国内镜像；需要走镜像时显式覆盖它。用户项目依赖仍使用上面的国内镜像。
 #
@@ -537,7 +537,7 @@ ENV HOME=/app/.home \
     PNPM_CONFIG_STORE_DIR=/app/.cache/pnpm-store \
     PATH=/app/.home/.local/bin:/app/.home/.local/share/pnpm/bin:${PATH}:/app/.home/bin \
     DSH_PLUGIN_REGISTRY=https://registry.npmjs.org \
-    DSH_PLUGINS="@lolkda/dsh-web-lan@latest @lolkda/dsh-dexsql-mcp@latest"
+    DSH_PLUGINS="@lolkda/dsh-web-lan@latest"
 
 USER 0:0
 WORKDIR /app

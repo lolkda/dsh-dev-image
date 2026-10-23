@@ -170,7 +170,7 @@ main() {
         // 默认插件写 @latest，镜像装的必须是 registry 当前的 latest；写死具体版本号
         // 只会放过"镜像里还是旧插件"的情况。查询走插件安装源，与安装同源。
         const registry = process.env.DSH_PLUGIN_REGISTRY || "https://registry.npmjs.org";
-        for (const name of ["@lolkda/dsh-web-lan", "@lolkda/dsh-dexsql-mcp"]) {
+        for (const name of ["@lolkda/dsh-web-lan"]) {
             const expected = execFileSync("npm", ["view", name, "version", "--registry", registry], { encoding: "utf8" }).trim();
             assert.match(expected, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, "unexpected registry answer for " + name + ": " + expected);
             assert.ok(pkg.dependencies?.[name], name + " is missing from dependencies");
@@ -179,24 +179,9 @@ main() {
             assert.equal(installed.version, expected, name + ": installed " + installed.version + ", expected latest " + expected);
             console.log("Verified plugin: " + name + "@" + installed.version);
         }
-        // 镜像不再安装全局 dexsql；二进制必须由 DexSQL 插件连 launcher 一起装进 profile。
-        const dexsqlRoot = profile + "/node_modules/@lolkda/dsh-dexsql-mcp";
-        const dexsqlPkg = JSON.parse(fs.readFileSync(dexsqlRoot + "/package.json", "utf8"));
-        assert.ok(dexsqlPkg.bin?.dexsql, "DexSQL plugin does not expose a launcher");
-        const target = process.platform + "-" + process.arch;
-        const binaryName = process.platform === "win32" ? "dexsql.exe" : "dexsql";
-        const bundledBinary = dexsqlRoot + "/vendor/" + target + "/" + binaryName;
-        assert.ok(fs.existsSync(bundledBinary), "DexSQL plugin is missing " + bundledBinary);
-        const launcher = dexsqlRoot + "/" + dexsqlPkg.bin.dexsql;
-        const version = execFileSync(process.execPath, [launcher, "--version"], { encoding: "utf8" }).trim();
-        assert.match(version, /^dexsql \d+\.\d+\.\d+$/, "unexpected bundled DexSQL version: " + version);
-        execFileSync(process.execPath, [launcher, "mcp", "--help"], { stdio: "ignore" });
-        console.log("Verified plugin-bundled DexSQL: " + version);
         assert.equal(process.getuid(), 0);
         assert.equal(process.getgid(), 0);
     '
-    docker exec "$web_id" sh -c 'dsh --profile web --dump-config | grep -q "id: dexsql-mcp"'
-    printf 'Verified DexSQL MCP entry in the live profile\n'
     # 裸 docker exec：exec 不经过入口（entrypoint 不会 cd "$APP_DIR"），也不经登录 shell
     # 或任何 alias；root 用户 --workdir /tmp 下无 shell 包装直接调用 adb。
     # 用消费全部输出的 grep（不用 -q）：避免 pipefail 下匹配即退出导致上游 SIGPIPE。

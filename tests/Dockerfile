@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # 快速验证真实 Linux UID/权限/capabilities，不下载完整开发工具链。
-FROM node:24-bookworm-slim
+FROM node:24.22.1-bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends util-linux passwd git \
     && rm -rf /var/lib/apt/lists/* \

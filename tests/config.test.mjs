@@ -7,7 +7,24 @@ import { test } from 'node:test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const dockerfile = read('Dockerfile');
-const defaultPlugins = '@lolkda/dsh-web-lan@latest @lolkda/dsh-dexsql-mcp@latest';
+const defaultPlugins = '@lolkda/dsh-web-lan@latest';
+
+// 基础镜像必须写死精确版本：`node:24` 会随 registry 漂移，安全修复无法审计。
+for (const path of ['Dockerfile', 'tests/Dockerfile']) {
+  test(`${path}: Node base is pinned to a patched bookworm release`, () => {
+    const match = read(path).match(/^FROM node:(\d+)\.(\d+)\.(\d+)-bookworm-slim(?:\s+AS\s+\S+)?$/m);
+    assert.ok(match, `${path}: Node base must use an exact bookworm-slim release tag`);
+    const [major, minor, patch] = match.slice(1, 4).map(Number);
+    const atLeastSecurityFloor = major > 24
+      || (major === 24 && (minor > 22 || (minor === 22 && patch >= 1)));
+    assert.ok(atLeastSecurityFloor,
+      `${path}: Node ${major}.${minor}.${patch} predates the 24.22.1 security release`);
+  });
+}
+
+test('image defaults to the current Java LTS line', () => {
+  assert.match(dockerfile, /^ARG JDK_VERSION=25$/m);
+});
 
 test('image defaults contain the shared plugin list', () => {
   const expression = dockerfile.match(/^\s*DSH_PLUGINS=(.+)$/m)?.[1];
