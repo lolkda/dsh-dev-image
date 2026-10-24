@@ -47,7 +47,8 @@ main() {
             test "$HOME" = /app/.home
             test "$(getent passwd root | cut -d: -f6)" = "$HOME"
             test -d "$HOME" && test ! -L "$HOME"
-            for tool in frida frida-ps frida-trace frida-ls-devices apktool adb python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
+            for tool in frida frida-ps frida-trace frida-ls-devices apktool adb \
+                        python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
                         git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
                 command -v "$tool" >/dev/null
             done
@@ -56,15 +57,38 @@ main() {
                 exit 1
             fi
             test ! -e /opt/dexsql
-            # adb 只要求 CLI：在 subshell 内先切到 /tmp 再调用，证明不依赖工具目录、alias、
-            # 交互 shell 或入口对 PATH 的额外处理。entrypoint.sh 会无条件 cd "$APP_DIR"，
-            # 所以给 docker run 加 --workdir 并不足以证明"任意目录"，必须在这里自己切；
-            # 用 subshell 是为了不改动本块其余断言（pnpm store / cargo build）依赖的 cwd。
+            # Android SDK 的四个组件都必须在镜像内，且 PATH 命中 SDK 而不是 Debian
+            # 的旧 adb。Google 没有 arm64 Linux build-tools，所以完整 SDK 断言只在
+            # amd64 执行；arm64 只验证 Debian adb 兜底。然后在 subshell 内切到 /tmp
+            # 调用，证明不依赖工具目录、alias、交互 shell 或入口对 PATH 的额外处理。
+            # entrypoint.sh 会无条件 cd "$APP_DIR"，所以给 docker run 加 --workdir
+            # 并不足以证明"任意目录"，必须在这里自己切；用 subshell 是为了不改动
+            # 本块其余断言（pnpm store / cargo build）依赖的 cwd。
+            if [ "$(dpkg --print-architecture)" = amd64 ]; then
+                for tool in sdkmanager fastboot aapt2 apksigner zipalign; do
+                    command -v "$tool" >/dev/null
+                done
+                test "$ANDROID_HOME" = /opt/android-sdk
+                test "$ANDROID_SDK_ROOT" = "$ANDROID_HOME"
+                test "$(command -v sdkmanager)" = "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+                test "$(command -v adb)" = "$ANDROID_HOME/platform-tools/adb"
+                test "$(command -v fastboot)" = "$ANDROID_HOME/platform-tools/fastboot"
+                test "$(command -v aapt2)" = "$ANDROID_HOME/build-tools/37.0.0/aapt2"
+                test "$(command -v apksigner)" = "$ANDROID_HOME/build-tools/37.0.0/apksigner"
+                sdkmanager --list_installed 2>/dev/null | grep -F "build-tools/37.0.0" >/dev/null
+                sdkmanager --list_installed 2>/dev/null | grep -F "platforms/android-37.2" >/dev/null
+                sdkmanager --list_installed 2>/dev/null | grep -F "platform-tools" >/dev/null
+            fi
             (cd /tmp && apktool --version)
             (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null)
             adb_from_tmp="$(cd /tmp && test "$PWD" = /tmp && adb version)"
             printf "Verified adb CLI from /tmp: %s\n" "$adb_from_tmp"
             printf "%s\n" "$adb_from_tmp" | grep -i "^Android Debug Bridge version " >/dev/null
+            if [ "$(dpkg --print-architecture)" = amd64 ]; then
+                (cd /tmp && fastboot --version | grep -F "fastboot version 37.0.1" >/dev/null)
+                (cd /tmp && aapt2 version | grep -F "Android Asset Packaging Tool" >/dev/null)
+                (cd /tmp && apksigner version >/dev/null)
+            fi
             python -V; node -v; npm -v; pnpm --version
             bash /tmp/typescript-smoke.sh
             go version; rustc -V; cargo -V; cargo clippy -V; rustfmt --version
@@ -183,11 +207,21 @@ main() {
         assert.equal(process.getgid(), 0);
     '
     # 裸 docker exec：exec 不经过入口（entrypoint 不会 cd "$APP_DIR"），也不经登录 shell
-    # 或任何 alias；root 用户 --workdir /tmp 下无 shell 包装直接调用 adb。
+    # 或任何 alias；root 用户 --workdir /tmp 下无 shell 包装直接调用 SDK 命令。
     # 用消费全部输出的 grep（不用 -q）：避免 pipefail 下匹配即退出导致上游 SIGPIPE。
     docker exec --workdir /tmp "$web_id" adb version \
         | grep -i "^Android Debug Bridge version " >/dev/null
-    printf 'Verified adb CLI over bare docker exec from /tmp\n'
+    if [[ "$(docker exec "$web_id" dpkg --print-architecture)" == amd64 ]]; then
+        docker exec --workdir /tmp "$web_id" fastboot --version \
+            | grep -F "fastboot version 37.0.1" >/dev/null
+        docker exec --workdir /tmp "$web_id" aapt2 version \
+            | grep -F "Android Asset Packaging Tool" >/dev/null
+        docker exec --workdir /tmp "$web_id" sh -ec \
+            'test "$(command -v adb)" = "$ANDROID_HOME/platform-tools/adb"'
+        printf 'Verified Android SDK CLIs over bare docker exec from /tmp\n'
+    else
+        printf 'Skipped native Android SDK assertions on non-amd64 image\n'
+    fi
     docker exec --workdir /tmp "$web_id" apktool --version
     docker exec --workdir /tmp "$web_id" frida --version
     for tool in frida-ps frida-trace frida-ls-devices; do

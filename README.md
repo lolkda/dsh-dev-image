@@ -1,10 +1,10 @@
 # dev-agent
 
-通用开发镜像：Python / Node / TypeScript / Java / Rust / Go / git / DeepSeek Harness，跑在 Linux 服务器的 Docker 里，本地零安装。
+通用开发镜像：Python / Node / TypeScript / Java / Rust / Go / Android SDK / git / DeepSeek Harness，跑在 Linux 服务器的 Docker 里，本地零安装。
 
 ## 包含什么
 
-版本均已核实存在（2026-10 实测 Docker Hub / Adoptium API / go.dev API / npm registry；2026-10 起 DexSQL 由 npm 插件提供，镜像不再单独安装二进制）。
+版本均已核实存在（2026-10 实测 Docker Hub / Adoptium API / go.dev API / npm registry / Google Android SDK 仓库；2026-10 起 DexSQL 由 npm 插件提供，镜像不再单独安装二进制）。
 
 | 组件 | 版本 | 来源 |
 |---|---|---|
@@ -19,6 +19,7 @@
 | git | bookworm apt | — |
 | DSH | 0.2.1-rc.2 | npm |
 | pnpm | 12.4.2 | npm（`dsh plugin` 依赖它） |
+| Android SDK（amd64） | Platform 37.2 / Build-Tools 37.0.0 / Platform-Tools 37.0.1 | Google 官方 `cmdline-tools` 23.0，根目录 `/opt/android-sdk`；arm64 仅有 Debian `adb` 兜底 |
 
 Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，所以 COPY 安全。Go 和 Java 不走 COPY，原因见下。
 
@@ -36,7 +37,7 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 | 进程 / 会话 | `ps` / `top` `tmux` | 长任务挂 tmux，断线不丢 |
 | 构建 | `cmake` `ninja` `autoconf` `automake` `libtool` | C / C++ 项目 |
 | 调试 | `gdb` `strace` | 需要 `cap_add: SYS_PTRACE`，compose 里已配好 |
-| Android 调试 | `adb` | 设备调试 CLI，来自 Debian 归档包而非完整 SDK；[用法与边界见下](#adbandroid-调试桥) |
+| Android 编译 / 调试 | `sdkmanager` `adb` `fastboot` `aapt2` `apksigner` `zipalign` | 完整 Android SDK（amd64），非 Debian 旧 adb；[用法与边界见下](#android-sdk编译与调试) |
 | APK 分析 | `apktool` 2.12.1 | 官方 JAR + SHA-256 校验，复用镜像 Java；支持任意目录直接调用 |
 | 动态插桩 | `frida` 17.23.1 / `frida-tools` 14.11.0 | 独立 Python 环境，系统 PATH 提供 `frida`、`frida-ps`、`frida-trace` 等 CLI |
 | 版本控制 | `git` `git-lfs` `gh` | |
@@ -222,8 +223,8 @@ PR 只测试 amd64、不推送；发布时 amd64 和 arm64 都必须通过。`ci
 
 > 两个平台在独立原生 runner 上并行构建与验收：amd64 使用 `ubuntu-latest`，arm64 使用 `ubuntu-24.04-arm`，不再通过 QEMU 模拟运行。缓存仍按架构隔离，完整启动、工具链和 Web 验收全部保留；单个平台上限仍为 90 分钟。
 >
-> 镜像不小：amd64 压缩后约 1.4 GB，arm64 约 1.3 GB。大头是 gradle（解压后约 200MB）、
-> Go 工具链、JDK，以及 apt 那一层。想瘦身就删 gradle 或 gdb。
+> 镜像不小：Android SDK 解压后约 500 MB；叠加 gradle（解压后约 200MB）、Go 工具链、
+> JDK 和 apt 层，压缩镜像预计在 1.6–1.7 GB 量级。想瘦身就删 gradle、gdb 或改用外部挂载的 SDK。
 
 ## 进去干活
 
@@ -235,7 +236,7 @@ docker compose exec agent bash
 
 ```bash
 docker run --rm -e DSH_PLUGINS= chikennice/dsh-dev-image:latest bash -lc \
-  'python -V && node -v && pnpm -v && tsc --version && tsx --version && go version && rustc -V && java -version && git --version && adb version >/dev/null && dsh --help >/dev/null && echo ALL-OK'
+  'python -V && node -v && pnpm -v && tsc --version && tsx --version && go version && rustc -V && java -version && git --version && adb version >/dev/null && fastboot --version >/dev/null && aapt2 version >/dev/null && dsh --help >/dev/null && echo ALL-OK'
 ```
 
 镜像构建过程本身有两道检查：每条 COPY 后面立刻验证该工具链，最后再跑一次全链路冒烟。任何一条路径不对，`docker compose build` 当场失败，不会拖到运行时。
@@ -260,28 +261,63 @@ tsx src/index.ts               # 直接运行；同样支持 .tsx
 
 全局工具用于开箱即用，不替代项目依赖：项目应按需声明 `typescript`、`tsx` 和 `@types/node`，通过 npm scripts 使用项目锁定的版本。镜像不全局安装框架或项目类型声明。
 
-### ADB（Android 调试桥）
+### Android SDK（编译与调试）
 
-`adb` 装的是 **Debian 12 bookworm 官方归档**的 [`adb`](https://packages.debian.org/bookworm/adb) 二进制包（源码包 `android-platform-tools`，bookworm 里是 `1:29.0.6-28`，`amd64` / `arm64` 都有），由 `apt-get install --no-install-recommends` 装成 `/usr/bin/adb`（真实二进制在 `/usr/lib/android-sdk/platform-tools/adb`）。系统 `PATH` 本来就含 `/usr/bin`，所以没有 alias、wrapper 或额外 PATH 编排，任意目录、普通/登录 Shell，以及不经 Shell 的 `docker exec` 都能直接用：
+amd64 镜像在 `/opt/android-sdk` 安装 Google 官方 SDK，不再使用 Debian bookworm 的旧 `adb`：
+
+| 组件 | 版本 | 内容 |
+|---|---|---|
+| `cmdline-tools` | 23.0 | `sdkmanager`，用于安装和检查 SDK 组件 |
+| `platform-tools` | 37.0.1 | `adb`、`fastboot` |
+| `build-tools` | 37.0.0 | `aapt2`、`d8`、`apksigner`、`zipalign` |
+| `platforms` | `android-37.2` | 对应 API 37.2 的 `android.jar` |
+
+**架构限制。** Google 的 Linux `build-tools` / `platform-tools` 归档只有 x86_64 二进制，没有原生 arm64 版本。完整 SDK 只在 **amd64** 镜像安装；arm64 镜像保留 Debian `adb` 作为调试兜底，不提供 APK 编译能力。
+
+`ANDROID_HOME` 与 `ANDROID_SDK_ROOT` 都指向 `/opt/android-sdk`。以下目录同时进入镜像 `ENV PATH` 和登录 Shell 的 `/etc/profile.d/00-dsh-path.sh`：
+
+```text
+/opt/android-sdk/build-tools/37.0.0
+/opt/android-sdk/platform-tools
+/opt/android-sdk/cmdline-tools/latest/bin
+```
+
+因此普通 Shell、登录 Shell 和裸 `docker exec` 都能直接调用：
 
 ```bash
+sdkmanager --list_installed
 adb version
+fastboot --version
+aapt2 version
+apksigner version
 docker compose exec --workdir /tmp agent adb version
 ```
 
-**范围。** 只有 adb 命令行本身：不含完整 Android SDK，不含 `fastboot`。Debian 维护的版本不是 Google 官方最新 Platform Tools。
+**编译配置。** `platforms;android-37.2` 是 minor API，项目需要同时指定主版本和 minor：
 
-**重建后生效。** `adb` 在镜像层，不在 `/app` 卷里，所以要重建镜像并重建容器：
+```kotlin
+android {
+    compileSdk = 37
+    compileSdkMinor = 2
+    buildToolsVersion = "37.0.0"
+}
+```
+
+最新 AGP 9.4 最高支持 API 37，默认 Build-Tools 是 36.0.0。镜像按“最新”安装 37.0.0；如果项目锁定的 AGP 不接受 37.0.0，就把 `buildToolsVersion` 改为 36.0.0 并安装对应组件，不要靠 PATH 里恰好存在的版本猜。
+
+**版本升级。** `ANDROID_CMDLINE_TOOLS_*`、`ANDROID_SDK_PLATFORM`、`ANDROID_BUILD_TOOLS_VERSION`、`ANDROID_PLATFORM_TOOLS_VERSION` 都是构建参数并参与构建期 `source.properties` 校验。升级时还要同步 `ENV PATH`、`/etc/profile.d` 和本文档；只改 ARG 会让命令找不到或构建当场失败。
+
+**范围。** 不含 NDK、CMake 的 Android 工具链、模拟器和 system-image；需要时用 `sdkmanager` 自行安装。`adb` 的 USB 透传仍不由默认 compose 提供：容器没有映射宿主 USB 设备，也没有安装 udev 规则推荐包。真机调试需要显式加 `--device` / `devices:`，设备端「USB 调试」和「允许此电脑调试」授权也在容器之外。
+
+**不启动 daemon。** 构建期和冒烟只调用 `adb version` / `fastboot --version`，不会启动 ADB server。
+
+**重建后生效。** SDK 在镜像层而不是 `/app` 卷里：
 
 ```bash
 docker compose up -d --build --force-recreate
 ```
 
-`docker build` 之后只 `restart` 旧容器不会换镜像（`docker compose restart` 同理）；上面的命令显式重建容器以使用新镜像。构建时会用 `adb version` 在两条 PATH 路径上各检查一次，装不上就当场失败。
-
-**CLI 可用 ≠ 真机可调试。** 默认 compose 不映射宿主 USB 设备，也不加 `--privileged` 或额外权限；`--no-install-recommends` 同时**没有**装 udev 规则推荐包（`android-sdk-platform-tools-common`）。要让容器直连 USB 真机，仍须把设备显式映射进来（`--device` / `devices:`，由使用者按需决定）。设备端的「USB 调试」开关和 adb 的「允许此电脑调试」授权同样在容器之外。
-
-**不启动 daemon。** 构建期和冒烟只调用 `adb version`：它在客户端本地打印版本，不需要设备，也不会拉起 ADB server。
+只 `restart` 旧容器不会换镜像；必须重建容器才能使用新的 SDK 组件。
 
 ---
 
@@ -626,7 +662,8 @@ dist-tag 会变化，且不保证指向所需的预发布版本。镜像通过 `
 
 - **容器里的 profile 是全新的空 profile。** 宿主 `~/.dsh/profiles/web` 里的东西（dshmarket、prompt-manager、skills-manager、`link:` 装的本地插件）不会自动跟过来，只有 `DSH_PLUGINS` 里列的会装。要带全套得另做 seed。
 - **MCP 服务器同理**：它们注册在 profile 的 `cordis.patch.yml` 里，不在容器里。而且 `ida` / `reqable` 是 Windows 宿主上的应用，本来就带不过来；`fastctx` 是纯文件/shell，可以。
-- **`adb` 只有命令本身，默认没有 USB 透传。** 容器未映射宿主 USB 设备，也没装 udev 规则推荐包，真机调试的 udev 授权与设备映射由使用者在宿主侧按需处理；默认 compose 不为此扩大权限。详见 [ADB（Android 调试桥）](#adbandroid-调试桥)。
+- **Android 编译只在 amd64 提供。** Google 的 Linux build-tools / platform-tools 只有 x86_64 二进制，arm64 镜像仅保留 Debian `adb`，不能编译 APK。详见 [Android SDK（编译与调试）](#android-sdk编译与调试)。
+- **amd64 的 Android SDK 已安装，但默认没有 USB 透传。** 容器未映射宿主 USB 设备，也没装 udev 规则推荐包，真机调试的 udev 授权与设备映射由使用者在宿主侧按需处理；默认 compose 不为此扩大权限。
 - 默认没有 docker 访问能力，容器内不能 `docker build` / `docker compose up`。
 - 默认只支持 `amd64` / `arm64`，其他架构会在 Java / Go 那两步显式报错退出。
 
@@ -643,7 +680,7 @@ sh -n cli-env.sh
 node --check home-init.mjs
 ```
 
-Linux 测试机上补跑 `sudo env PATH="$PATH" bash tests/entrypoint.test.sh` 和 `sudo env PATH="$PATH" node --test tests/*.test.mjs`；只操作隔离 fixture，不应对真实工作区运行入口。[CLI 回归测试](tests/entrypoint.test.sh) 实际执行 root 入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[DexSQL 回归](tests/dexsql.test.mjs) 校验默认不安装 DexSQL 插件、镜像不提供全局二进制、插件源隔离；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置测试可在 Git Bash 运行，root-only 入口验收需要 Linux。[ADB 回归](tests/adb.test.mjs) 校验 `adb` 来自最终镜像的系统包安装（而非用户目录或构建期临时下载）、构建期两条 PATH 都 fail-fast、并且没有 alias / shell 函数 / daemon 启动。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**。
+Linux 测试机上补跑 `sudo env PATH="$PATH" bash tests/entrypoint.test.sh` 和 `sudo env PATH="$PATH" node --test tests/*.test.mjs`；只操作隔离 fixture，不应对真实工作区运行入口。[CLI 回归测试](tests/entrypoint.test.sh) 实际执行 root 入口，只替换外部插件安装命令；[配置测试](tests/config.test.mjs) 验证空值展开、版本默认值、失败传播和发布约束；[DexSQL 回归](tests/dexsql.test.mjs) 校验默认不安装 DexSQL 插件、镜像不提供全局二进制、插件源隔离；[用户 CLI 回归](tests/user-cli.test.mjs) 在隔离 HOME 中验证实际 npm prefix、本地包安装、路径覆盖和 PATH 恢复。用户 CLI 集成用例依赖 POSIX 路径和原生 npm，在 Windows 跳过、由 Linux CI 执行；配置测试可在 Git Bash 运行，root-only 入口验收需要 Linux。[Android SDK 回归](tests/android-sdk.test.mjs) 校验四个组件的版本参数、官方 cmdline-tools 的 SHA-256、`source.properties` 精确版本、amd64 不安装 Debian 旧 `adb`、arm64 仅保留 adb 兜底、`ENV` 与登录 Shell 的 PATH 一致，以及构建期对 `sdkmanager` / `adb` / `fastboot` / `aapt2` / `apksigner` 的 fail-fast 调用。这些检查**不能替代 Linux 的 UID、capability、挂载权限测试**，也不能替代真实 Docker 构建。
 
 Linux + Docker 下的快速权限验收：
 
@@ -662,7 +699,7 @@ bash tests/container-runtime.sh dsh-dev-image:verify
 bash tests/image-smoke.sh dsh-dev-image:verify
 ```
 
-[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 TypeScript/TSX 与 Rust 编译运行、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程；同时确认镜像层没有全局 `dexsql` 命令或 `/opt/dexsql`。同时在 **root** 的两种 Shell 里从 `/tmp` 执行 `adb version`，再用裸 `docker exec --workdir /tmp` 复核一次，全程不启动 ADB server（构建期也在两条 PATH 路径上各跑一次 `adb version`）。[TypeScript 验收](tests/typescript-smoke.sh) 在 root 的两种 Shell 中验证 ESM 跨模块导入、`enum` 转译、无框架 TSX 和类型错误拒绝，不下载项目依赖。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 以 root 在新目录与旧 UID 目录中运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
+[完整镜像冒烟](tests/image-smoke.sh) 检查登录/非登录 shell、实际 TypeScript/TSX 与 Rust 编译运行、Maven/pnpm 缓存位置，以及默认 Web 的真实登录流程；同时确认镜像层没有全局 `dexsql` 命令或 `/opt/dexsql`。Android 部分在 **root** 的两种 Shell 里从 `/tmp` 校验 `sdkmanager`、`adb`、`fastboot`、`aapt2`、`apksigner` 的 PATH 命中和实际执行，再用裸 `docker exec --workdir /tmp` 复核，全程不启动 ADB server（构建期也在两条 PATH 路径上各跑一次）。[TypeScript 验收](tests/typescript-smoke.sh) 在 root 的两种 Shell 中验证 ESM 跨模块导入、`enum` 转译、无框架 TSX 和类型错误拒绝，不下载项目依赖。其中的[用户 CLI 容器验收](tests/user-cli-runtime.sh) 以 root 在新目录与旧 UID 目录中运行[离线安装用例](tests/user-cli-smoke.sh)：实际安装 npm/pnpm/Yarn/pip/uv/Cargo/Go 的无依赖本地 CLI，换容器、清缓存后再次运行，并验证裸 `docker exec`；同时检查项目 npm 安装和 Python venv 未被全局目录配置影响。CI 中的 `dsh web --no-open` 是**临时验收**，只把随机端口发布到 runner 的 loopback，结束后删除容器和 cookie，不是在 Actions 上正式部署。
 
 DSH 对匿名 `/` 请求返回 `401` 是正常鉴权行为，不能用匿名 `curl --fail` 判断服务是否启动。验收从该测试容器的启动日志取 token，跟随登录重定向并保留 cookie，最终必须获得 `200`；不会为了测试通过而关闭鉴权。[Web 登录回归](tests/web-ready.test.mjs) 使用真实 HTTP 服务覆盖此流程及失败分支。
 

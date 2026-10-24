@@ -42,6 +42,12 @@ ARG FRIDA_VERSION=17.23.1
 ARG FRIDA_TOOLS_VERSION=14.11.0
 ARG APKTOOL_VERSION=2.12.1
 ARG APKTOOL_SHA256=66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa
+ARG ANDROID_CMDLINE_TOOLS_VERSION=23.0
+ARG ANDROID_CMDLINE_TOOLS_BUILD=16111833
+ARG ANDROID_CMDLINE_TOOLS_SHA256=0877a1d048fe4a24efe2eff536ca4223f7adeb58648bb81909d33c446918cfa8
+ARG ANDROID_SDK_PLATFORM=37.2
+ARG ANDROID_BUILD_TOOLS_VERSION=37.0.0
+ARG ANDROID_PLATFORM_TOOLS_VERSION=37.0.1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -62,10 +68,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #
 # apt 只负责系统库和命令行工具（gh 够用；maven / gradle / yq 都不够，见下）。
 #
-# adb：装 Debian 归档的 `adb` 二进制包（源码包 android-platform-tools，bookworm
-# 里是 1:29.0.6-28，amd64 / arm64 都有）。它落成 /usr/bin/adb，而系统 PATH 本来
-# 就含 /usr/bin，所以不需要 alias、wrapper 或额外 PATH 编排。不装完整 Android
-# SDK，也不装 fastboot；"CLI 可用"与"USB 真机授权"是两件事，见 README。
+# Android：amd64 不在 apt 里装 Debian 的 adb，后面用官方 cmdline-tools 安装
+# 完整 platform-tools、build-tools 和 platform；apt 的旧 adb 会先于 SDK 被
+# PATH 命中，造成"版本看着不对、实际跑的是另一个"的同类问题。
+# arm64 没有 Google 官方原生 Linux build-tools，保留 Debian adb 作为调试兜底。
 #
 # build-essential 是必需的，不只是为了编译：它提供 libstdc++6 和 libgcc_s，
 # 而 node、rustc、libjvm.so 都动态链接这两个；rust / go(cgo) 还需要一个 cc
@@ -87,10 +93,12 @@ RUN set -eux; \
         ripgrep fd-find file tree sqlite3 \
         iproute2 dnsutils netcat-openbsd lsof bc man-db tmux \
         shellcheck git-lfs \
-        adb \
         cmake ninja-build autoconf automake libtool \
         gdb strace \
         gh; \
+    if [ "$(dpkg --print-architecture)" = arm64 ]; then \
+        apt-get install -y --no-install-recommends adb; \
+    fi; \
     rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
@@ -122,7 +130,9 @@ ENV JAVA_HOME=/opt/java \
     GRADLE_USER_HOME=/app/.cache/gradle \
     UV_CACHE_DIR=/app/.cache/uv \
     DSH_HOME=/app/.dsh \
-    PATH=/app/.cache/cargo/bin:/app/.cache/go/bin:/opt/java/bin:/opt/maven/bin:/opt/gradle/bin:/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+    ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    PATH=/app/.cache/cargo/bin:/app/.cache/go/bin:/opt/java/bin:/opt/maven/bin:/opt/gradle/bin:/opt/android-sdk/build-tools/37.0.0:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin:/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # -----------------------------------------------------------------------------
 # 修复登录 shell 丢 PATH —— 这是个真实故障，不是理论问题
@@ -154,7 +164,7 @@ RUN set -eux; \
         '#!/bin/sh' \
         '# 还原 /etc/profile 硬编码覆盖掉的 PATH（见 Dockerfile 同名注释）。' \
         '# 幂等：用 case 判断，重复 source 不会叠加。' \
-        'for d in /app/.cache/cargo/bin /app/.cache/go/bin /opt/java/bin /opt/maven/bin /opt/gradle/bin /usr/local/cargo/bin /usr/local/go/bin; do' \
+        'for d in /app/.cache/cargo/bin /app/.cache/go/bin /opt/java/bin /opt/maven/bin /opt/gradle/bin /opt/android-sdk/cmdline-tools/latest/bin /opt/android-sdk/platform-tools /opt/android-sdk/build-tools/37.0.0 /usr/local/cargo/bin /usr/local/go/bin; do' \
         '    case ":$PATH:" in' \
         '        *":$d:"*) ;;' \
         '        *) [ -d "$d" ] && PATH="$d:$PATH" ;;' \
@@ -232,6 +242,67 @@ RUN set -eux; \
     tar -xzf /tmp/jdk.tar.gz -C /opt/java --strip-components=1; \
     rm -f /tmp/jdk.tar.gz; \
     java -version
+
+# -----------------------------------------------------------------------------
+# Android SDK —— 编译 APK 与真机调试
+#
+# 只装编译和调试真正用到的四块，不装 NDK、模拟器或 system-image：
+#   cmdline-tools  ← sdkmanager 本体，用来安装下面三个
+#   platform-tools ← adb、fastboot
+#   build-tools    ← aapt2、d8、apksigner、zipalign
+#   platforms      ← 对应 compileSdk 的 android.jar
+#
+# 版本全部钉在 ARG 里，不用 sdkmanager 的隐式 latest：今天能构建、明天因
+# 上游更新而失败，是比多写一行版本号更贵的故障。升级时同时改 ARG、PATH 中
+# 的 build-tools 目录和 README，构建期的 source.properties 校验会兜底。
+#
+# cmdline-tools 23.0 的 sdkmanager 已不再要求交互式 --licenses，安装缺失
+# 组件时会自动接受 SDK license；这里保留非交互构建，不接管道喂 yes。
+#
+# amd64 不装 Debian 的 adb：PATH 上只允许存在这一份 platform-tools，避免 apt
+# 旧版本覆盖 SDK 版本。构建期从任意目录调用 adb / fastboot / aapt2 / apksigner，
+# 证明 PATH 和动态库都完整；不启动 ADB daemon。
+#
+# Google 的 Linux build-tools / platform-tools 归档只有 x86_64 二进制，arm64
+# 没有原生 aapt2、adb。镜像不能在 arm64 上假装安装成功，因此只在 amd64 安装；
+# arm64 保留 apt 的 adb 供调试，Android 编译能力只承诺 amd64。CI 的 arm64
+# 构建仍会通过，但不会运行 Android SDK 断言。
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    if [ "$(dpkg --print-architecture)" != amd64 ]; then \
+        echo "Android SDK native build-tools unavailable on $(dpkg --print-architecture); keeping adb only"; \
+        adb version; \
+        exit 0; \
+    fi; \
+    export ANDROID_HOME=/opt/android-sdk; \
+    export ANDROID_SDK_ROOT="$ANDROID_HOME"; \
+    mkdir -p "$ANDROID_HOME/cmdline-tools"; \
+    curl -fsSL -o /tmp/android-cmdline-tools.zip \
+        "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS_BUILD}_latest.zip"; \
+    echo "${ANDROID_CMDLINE_TOOLS_SHA256}  /tmp/android-cmdline-tools.zip" | sha256sum -c -; \
+    unzip -q /tmp/android-cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"; \
+    mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"; \
+    rm -f /tmp/android-cmdline-tools.zip; \
+    sdkmanager --install \
+        "platforms;android-${ANDROID_SDK_PLATFORM}" \
+        "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
+        "platform-tools"; \
+    grep -Fx "Pkg.Revision=${ANDROID_CMDLINE_TOOLS_VERSION}" \
+        "$ANDROID_HOME/cmdline-tools/latest/source.properties"; \
+    grep -Fx "Pkg.Revision=${ANDROID_PLATFORM_TOOLS_VERSION}" \
+        "$ANDROID_HOME/platform-tools/source.properties"; \
+    grep -Fx "Pkg.Revision=${ANDROID_BUILD_TOOLS_VERSION}" \
+        "$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS_VERSION}/source.properties"; \
+    grep -Fx "AndroidVersion.ApiLevel=${ANDROID_SDK_PLATFORM}" \
+        "$ANDROID_HOME/platforms/android-${ANDROID_SDK_PLATFORM}/source.properties"; \
+    test "$(command -v adb)" = "$ANDROID_HOME/platform-tools/adb"; \
+    test "$(command -v fastboot)" = "$ANDROID_HOME/platform-tools/fastboot"; \
+    test "$(command -v aapt2)" = "$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS_VERSION}/aapt2"; \
+    test "$(command -v apksigner)" = "$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS_VERSION}/apksigner"; \
+    adb version; \
+    fastboot --version; \
+    aapt2 version; \
+    apksigner version
 
 # -----------------------------------------------------------------------------
 # Apktool —— 官方 JAR 复用镜像 Java，避免 apt 引入第二套 Java 运行时。
@@ -463,7 +534,20 @@ RUN set -eux; \
              cmake --version; ninja --version; \
              sqlite3 --version; tmux -V; shellcheck --version; \
              gh --version; gdb --version; strace -V; \
-             adb version; \
+             if [ "$(dpkg --print-architecture)" = amd64 ]; then \
+                 test "$ANDROID_HOME" = /opt/android-sdk; \
+                 test "$(command -v adb)" = "$ANDROID_HOME/platform-tools/adb"; \
+                 test "$(command -v fastboot)" = "$ANDROID_HOME/platform-tools/fastboot"; \
+                 test "$(command -v aapt2)" = "$ANDROID_HOME/build-tools/37.0.0/aapt2"; \
+                 test "$(command -v apksigner)" = "$ANDROID_HOME/build-tools/37.0.0/apksigner"; \
+                 sdkmanager --version; \
+                 adb version; \
+                 fastboot --version; \
+                 aapt2 version; \
+                 apksigner version; \
+             else \
+                 adb version; \
+             fi; \
               (cd /tmp && apktool --version); \
               (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null); \
              for c in xxd file tree nc dig ss lsof bc man; do command -v "$c" >/dev/null; done; \
