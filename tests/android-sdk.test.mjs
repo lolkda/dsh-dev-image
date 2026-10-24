@@ -119,3 +119,9 @@ test('Android SDK binaries stay plain PATH entries without aliases or a build-ti
   assert.doesNotMatch(read('tests/image-smoke.sh'), /adb\s+(?:start-server|kill-server)/,
     'Container smoke must not start an ADB daemon');
 });
+
+test('container smoke merges aapt2 stderr before matching its version banner', () => {
+  const smoke = read('tests/image-smoke.sh');
+  assert.match(smoke, /aapt2 version 2>&1 \| grep/,
+    'aapt2 writes its version banner to stderr; piping only stdout makes grep fail');
+});
