@@ -79,6 +79,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #
 # libatomic1：node 官方镜像显式装了它（注释写 "libatomic1 for arm"），arm64 需要。
 # xxd：bookworm 里是独立包，**不在 vim-common 里**（trixie 才拆出来的说法是反的）。
+# 不装 tree / fd-find / vim / man-db：Agent 的 read/glob/edit 已覆盖目录浏览、
+# 文本编辑和交互分页；`file`、`xxd` 和 `less` 保留，分别用于二进制识别、
+# 十六进制查看和 git 分页。
 # 不装 libx11-* / libxext6 / libxrender1 / libxi6 / libxtst6 / fontconfig /
 # libfreetype6：镜像没有 GUI 程序或浏览器，代码与测试也不引用这组库。
 # -----------------------------------------------------------------------------
@@ -88,10 +91,10 @@ RUN set -eux; \
         ca-certificates curl wget git openssh-client gnupg jq \
         build-essential pkg-config \
         libssl-dev zlib1g-dev libatomic1 \
-        procps less vim xxd unzip xz-utils zip rsync tzdata \
+        procps less xxd unzip xz-utils zip rsync tzdata \
         \
-        ripgrep fd-find file tree sqlite3 \
-        iproute2 dnsutils netcat-openbsd lsof bc man-db tmux \
+        ripgrep file sqlite3 \
+        iproute2 dnsutils netcat-openbsd lsof bc tmux \
         shellcheck git-lfs \
         cmake ninja-build autoconf automake libtool \
         gdb strace \
@@ -441,12 +444,6 @@ RUN set -eux; \
     yq --version
 
 # -----------------------------------------------------------------------------
-# Debian 把 fd 的二进制改名成 fdfind（避开 fdclone 的 fd），建个 fd 别名，
-# 否则 agent 按习惯敲 fd 会 command not found。
-# -----------------------------------------------------------------------------
-RUN set -eux; ln -sfn /usr/bin/fdfind /usr/local/bin/fd; fd --version
-
-# -----------------------------------------------------------------------------
 # root-only + /app
 #
 # root 的账户家目录与运行时 HOME 保持一致（SSH 等工具会读取 passwd）。
@@ -530,7 +527,7 @@ RUN set -eux; \
              java -version; javac -version; mvn -v; gradle --version; \
              git --version; git lfs version; \
              jq --version; yq --version; uv --version; \
-             rg --version; fd --version; \
+             rg --version; \
              cmake --version; ninja --version; \
              sqlite3 --version; tmux -V; shellcheck --version; \
              gh --version; gdb --version; strace -V; \
@@ -550,7 +547,7 @@ RUN set -eux; \
              fi; \
               (cd /tmp && apktool --version); \
               (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null); \
-             for c in xxd file tree nc dig ss lsof bc man; do command -v "$c" >/dev/null; done; \
+             for c in xxd file nc dig ss lsof bc; do command -v "$c" >/dev/null; done; \
              dsh --help > /dev/null'; \
     done; \
     echo '=== ALL TOOLCHAINS OK (bash -c and bash -lc) ==='

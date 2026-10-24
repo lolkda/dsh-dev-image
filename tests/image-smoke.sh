@@ -49,7 +49,7 @@ main() {
             test -d "$HOME" && test ! -L "$HOME"
             for tool in frida frida-ps frida-trace frida-ls-devices apktool adb \
                         python node npm yarn pnpm tsc tsx go rustc cargo java javac mvn gradle \
-                        git jq yq uv rg fd cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
+                        git jq yq uv rg cmake ninja sqlite3 tmux shellcheck gh gdb strace dsh; do
                 command -v "$tool" >/dev/null
             done
             if command -v dexsql >/dev/null 2>&1; then

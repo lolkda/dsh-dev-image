@@ -30,8 +30,7 @@ Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，�
 | 类别 | 工具 | 用途 |
 |---|---|---|
 | 代码搜索 | `rg`（ripgrep） | agent 搜代码的主力 |
-| 找文件 | `fd` | Debian 的二进制叫 `fdfind`，镜像里建了 `fd` 别名 |
-| 检视 | `file` `tree` `xxd` `less` `vim` `man` | 类型、结构、十六进制 |
+| 检视 | `file` `xxd` `less` | 类型、十六进制、分页 |
 | 数据处理 | `sqlite3` `jq` `yq`(v4) | 查库、JSON / YAML |
 | 网络诊断 | `ip` / `ss` `dig` `nc` `lsof` | 端口占用、连通性、DNS |
 | 进程 / 会话 | `ps` / `top` `tmux` | 长任务挂 tmux，断线不丢 |

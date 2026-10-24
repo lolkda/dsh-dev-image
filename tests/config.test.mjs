@@ -45,6 +45,22 @@ test('image does not install the unused X11 and font stack', () => {
   }
 });
 
+test('image drops redundant interactive tools but keeps binary inspection and paging', () => {
+  const apt = dockerfile.match(
+    /apt-get install -y --no-install-recommends \\\n([\s\S]*?)gh;/,
+  )?.[1] ?? '';
+  assert.ok(apt, 'Missing main apt-get install list');
+  const packages = apt.replace(/\\\n/g, ' ').split(/\s+/).filter(Boolean);
+  for (const pkg of ['tree', 'fd-find', 'vim', 'man-db']) {
+    assert.ok(!packages.includes(pkg), `redundant interactive package remains: ${pkg}`);
+  }
+  for (const pkg of ['file', 'xxd', 'less']) {
+    assert.ok(packages.includes(pkg), `required inspection package was dropped: ${pkg}`);
+  }
+  assert.doesNotMatch(dockerfile, /ln -sfn \/usr\/bin\/fdfind/,
+    'fd symlink must be removed with fd-find');
+});
+
 test('image defaults contain the shared plugin list', () => {
   const expression = dockerfile.match(/^\s*DSH_PLUGINS=(.+)$/m)?.[1];
   assert.ok(expression, 'Missing image plugin defaults');
