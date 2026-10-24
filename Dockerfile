@@ -79,6 +79,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #
 # libatomic1：node 官方镜像显式装了它（注释写 "libatomic1 for arm"），arm64 需要。
 # xxd：bookworm 里是独立包，**不在 vim-common 里**（trixie 才拆出来的说法是反的）。
+# 不装 libx11-* / libxext6 / libxrender1 / libxi6 / libxtst6 / fontconfig /
+# libfreetype6：镜像没有 GUI 程序或浏览器，代码与测试也不引用这组库。
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     apt-get update; \
@@ -87,8 +89,6 @@ RUN set -eux; \
         build-essential pkg-config \
         libssl-dev zlib1g-dev libatomic1 \
         procps less vim xxd unzip xz-utils zip rsync tzdata \
-        libfreetype6 fontconfig \
-        libx11-6 libxext6 libxrender1 libxi6 libxtst6 \
         \
         ripgrep fd-find file tree sqlite3 \
         iproute2 dnsutils netcat-openbsd lsof bc man-db tmux \

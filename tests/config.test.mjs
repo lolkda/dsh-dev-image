@@ -26,6 +26,25 @@ test('image defaults to the current Java LTS line', () => {
   assert.match(dockerfile, /^ARG JDK_VERSION=25$/m);
 });
 
+test('image does not install the unused X11 and font stack', () => {
+  const apt = dockerfile.match(
+    /apt-get install -y --no-install-recommends \\\n([\s\S]*?)gh;/,
+  )?.[1] ?? '';
+  assert.ok(apt, 'Missing main apt-get install list');
+  const packages = apt.replace(/\\\n/g, ' ').split(/\s+/).filter(Boolean);
+  for (const pkg of [
+    'libfreetype6',
+    'fontconfig',
+    'libx11-6',
+    'libxext6',
+    'libxrender1',
+    'libxi6',
+    'libxtst6',
+  ]) {
+    assert.ok(!packages.includes(pkg), `unused GUI package remains: ${pkg}`);
+  }
+});
+
 test('image defaults contain the shared plugin list', () => {
   const expression = dockerfile.match(/^\s*DSH_PLUGINS=(.+)$/m)?.[1];
   assert.ok(expression, 'Missing image plugin defaults');
