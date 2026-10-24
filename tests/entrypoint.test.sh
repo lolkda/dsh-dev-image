@@ -47,6 +47,7 @@ setup_case() {
     unset MAVEN_CONFIG GRADLE_USER_HOME UV_CACHE_DIR
     unset npm_config_prefix NPM_CONFIG_PREFIX PNPM_HOME PNPM_CONFIG_GLOBAL_BIN_DIR PNPM_CONFIG_GLOBAL_DIR
     unset YARN_PREFIX YARN_GLOBAL_FOLDER PYTHONUSERBASE UV_TOOL_DIR UV_TOOL_BIN_DIR CARGO_INSTALL_ROOT GOBIN
+    unset ANDROID_HOME ANDROID_SDK_ROOT
     export HOME="$CASE_DIR/home"
     mkdir -p "$APP_DIR"
     : > "$CALLS"
@@ -55,6 +56,19 @@ setup_case() {
 creates_state_before_command() {
     setup_case
     bash "$ROOT/entrypoint.sh" bash -c 'test -d "$DSH_HOME" && test -d "$APP_DIR/.cache/npm"'
+}
+
+android_sdk_dirs_are_added_to_non_login_path() {
+    setup_case
+    local sdk="$CASE_DIR/android-sdk"
+    mkdir -p "$sdk/build-tools/37.0.0" "$sdk/platform-tools" "$sdk/cmdline-tools/latest/bin"
+    export ANDROID_HOME="$sdk" ANDROID_SDK_ROOT="$sdk"
+    bash "$ROOT/entrypoint.sh" bash -c '
+        case ":$PATH:" in *":$ANDROID_HOME/build-tools/37.0.0:"*) ;; *) exit 1 ;; esac
+        case ":$PATH:" in *":$ANDROID_HOME/platform-tools:"*) ;; *) exit 1 ;; esac
+        case ":$PATH:" in *":$ANDROID_HOME/cmdline-tools/latest/bin:"*) ;; *) exit 1 ;; esac
+        test "$ANDROID_SDK_ROOT" = "$ANDROID_HOME"
+    '
 }
 
 uses_workspace_for_relative_commands() {
@@ -249,6 +263,7 @@ run_case 'reject package-manager options passed as plugin names' plugin_option_i
 run_case 'support spaces and quotes in the workspace path' quoted_workspace_path_is_supported
 run_case 'preserve the command exit status' command_exit_status_is_preserved
 run_case 'create state directories before the command as root' creates_state_before_command
+run_case 'add Android SDK directories to non-login command PATH' android_sdk_dirs_are_added_to_non_login_path
 run_case 'run commands from APP_DIR' uses_workspace_for_relative_commands
 run_case 'reject an empty command' empty_command_is_error
 run_case 'required plugin failure prevents command execution' plugin_failure_blocks_command

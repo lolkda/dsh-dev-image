@@ -27,6 +27,24 @@ export MAVEN_CONFIG="${MAVEN_CONFIG:-$APP_DIR/.cache/m2}"
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$APP_DIR/.cache/gradle}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$APP_DIR/.cache/uv}"
 
+# 有些运行时会在创建容器时覆盖镜像 PATH；入口再补一次 SDK 目录，
+# 让 `bash -c` / 裸 docker exec 也能直接找到 SDK 命令。arm64 没有完整
+# SDK，目录不存在时自动跳过，仍回落到 /usr/bin/adb。
+export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
+export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+for sdk_dir in \
+    "$ANDROID_HOME/cmdline-tools/latest/bin" \
+    "$ANDROID_HOME/platform-tools" \
+    "$ANDROID_HOME"/build-tools/*; do
+    [[ -d "$sdk_dir" ]] || continue
+    case ":$PATH:" in
+        *":$sdk_dir:"*) ;;
+        *) PATH="$sdk_dir:$PATH" ;;
+    esac
+done
+unset sdk_dir
+export PATH
+
 (( $# > 0 )) || fatal '缺少启动命令，例如：dsh web 或 bash。'
 [[ "$APP_DIR" = /* && "$APP_DIR" != / ]] || fatal 'APP_DIR 必须是非根目录的绝对路径。'
 [[ "${DSH_PLUGINS_REQUIRED:-1}" =~ ^[01]$ ]] || fatal 'DSH_PLUGINS_REQUIRED 只能是 0 或 1。'
