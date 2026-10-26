@@ -8,8 +8,8 @@
 
 | 组件 | 版本 | 来源 |
 |---|---|---|
-| base | Debian 12 bookworm, glibc 2.36 | `python:3.12-slim-bookworm` |
-| Python | 3.12.x | base 自带 |
+| base | Debian 12 bookworm, glibc 2.36 | `python:3.13.17-slim-bookworm` |
+| Python | 3.13.17 | base 自带 |
 | Node | 24.22.1 LTS（含 npm / yarn / corepack） | `node:24.22.1-bookworm-slim` |
 | TypeScript（`tsc`） | 7.0.2 | npm（原生编译器，按架构安装） |
 | `tsx` | 4.23.15 | npm（直接运行 TS / TSX） |
@@ -21,7 +21,7 @@
 | pnpm | 12.4.2 | npm（`dsh plugin` 依赖它） |
 | Android SDK（amd64） | Platform 37.2 / Build-Tools 37.0.0 / Platform-Tools 37.0.1 | Google 官方 `cmdline-tools` 23.0，根目录 `/opt/android-sdk`；arm64 仅有 Debian `adb` 兜底 |
 
-Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，所以 COPY 安全。Go 和 Java 不走 COPY，原因见下。
+Node / Rust 来自 **Debian bookworm 系**（glibc 2.36），和 base 一致，所以 COPY 安全。Go 和 Java 不走 COPY，原因见下。Python 基础镜像和 Node 一样固定到精确补丁版本，避免重建时随 `3.13-slim` 标签漂移。
 
 ### 开发工具（配合 agent 用）
 
@@ -542,7 +542,7 @@ docker compose up -d --force-recreate
 | `npm install -g` | `/app/.home/.local/lib/node_modules` | `/app/.home/.local/bin` | `npm_config_prefix` |
 | `pnpm add -g` | `/app/.home/.local/share/pnpm/global`（版本子目录由 pnpm 管理） | `/app/.home/.local/share/pnpm/bin` | `PNPM_HOME`；也支持 `PNPM_CONFIG_GLOBAL_DIR` / `PNPM_CONFIG_GLOBAL_BIN_DIR` |
 | `yarn global add` | `/app/.home/.local/share/yarn/global` | `/app/.home/.local/bin` | `YARN_GLOBAL_FOLDER` / `YARN_PREFIX` |
-| `python -m pip install --user` | `/app/.home/.local/lib/python3.12/site-packages` | `/app/.home/.local/bin` | `PYTHONUSERBASE` |
+| `python -m pip install --user` | `/app/.home/.local/lib/python3.13/site-packages` | `/app/.home/.local/bin` | `PYTHONUSERBASE` |
 | `uv tool install` | `/app/.home/.local/share/uv/tools` | `/app/.home/.local/bin` | `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` |
 | `cargo install` | `/app/.home/.local`（含安装记录） | `/app/.home/.local/bin` | `CARGO_INSTALL_ROOT` |
 | `go install` | 编译缓存仍在 `/app/.cache/go` | `/app/.home/.local/bin` | `GOBIN` |
@@ -633,7 +633,7 @@ AGENT_HOME="$(mktemp -d)" DSH_PLUGINS='' docker compose run --rm --no-deps agent
 
 ## 几个刻意的取舍
 
-**base 用 `python:3.12-slim-bookworm` 而不是裸 `debian:bookworm-slim`。**
+**base 用 `python:3.13.17-slim-bookworm` 而不是裸 `debian:bookworm-slim`。**
 官方 python 镜像构建时会用 `ldd` 反查 python 实际依赖的 `.so`，把提供这些库的 apt 包（`libexpat1` / `libffi8` / `libsqlite3-0` / `liblzma5` / `libgdbm6` / `libreadline8` / `libuuid1` …）标记为 manual 保留，并跑过 `ldconfig`。换成裸 debian 再 COPY python 的 `/usr/local`，这些库一个都不会在，`import sqlite3` / `ssl` / `ctypes` 全部 ImportError，而且报错很晚。
 
 **Java 不走 COPY。**

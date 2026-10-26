@@ -3,7 +3,7 @@
 # =============================================================================
 #  dev-agent —— 通用开发镜像（Python / Node / TypeScript / Java / Rust / Go / git / DSH）
 #
-#  base 选 python:3.12-slim-bookworm 而不是裸 debian:bookworm-slim，是刻意的：
+#  base 选 python:3.13.17-slim-bookworm 而不是裸 debian:bookworm-slim，是刻意的：
 #
 #    官方 python 镜像构建时会用 ldd 反查 python 二进制实际依赖的 .so，把提供
 #    这些库的 apt 包（libexpat1 / libffi8 / libsqlite3-0 / liblzma5 / libbz2-1.0 /
@@ -12,7 +12,7 @@
 #    都不会在，`import sqlite3` / `ssl` / `ctypes` 全部 ImportError，且报错很晚、
 #    很难查。
 #
-#    python:3.12-slim-bookworm 本身就是 debian 12 bookworm（glibc 2.36），
+#    python:3.13.17-slim-bookworm 本身就是 debian 12 bookworm（glibc 2.36），
 #    所以它既是 debian base，又白送了 python 的完整运行时。
 #
 #  glibc 规则（改版本时必读）：
@@ -26,7 +26,7 @@ FROM node:24.22.1-bookworm-slim AS src-node
 FROM rust:1.98.1-slim-bookworm  AS src-rust
 
 # ---- 最终镜像 ---------------------------------------------------------------
-FROM python:3.12-slim-bookworm
+FROM python:3.13.17-slim-bookworm
 
 ARG GO_VERSION=1.27.1
 ARG JDK_VERSION=25
@@ -519,7 +519,8 @@ RUN set -eux; \
     for sh in "bash -ec" "bash -lec"; do \
         echo "=== 用 [$sh] 验证 ==="; \
         $sh 'set -euo pipefail; \
-              python -V; \
+              test "$(python -V 2>&1)" = "Python 3.13.17"; \
+             python -c "import bz2, ctypes, lzma, sqlite3, ssl, uuid"; \
              node -v; npm -v; yarn --version; pnpm --version; \
              tsc --version; tsx --version; \
              go version; \

@@ -89,7 +89,9 @@ main() {
                 (cd /tmp && aapt2 version 2>&1 | grep -F "Android Asset Packaging Tool" >/dev/null)
                 (cd /tmp && apksigner version >/dev/null)
             fi
-            python -V; node -v; npm -v; pnpm --version
+            test "$(python -V 2>&1)" = "Python 3.13.17"
+            python -c "import bz2, ctypes, lzma, sqlite3, ssl, uuid"
+            node -v; npm -v; pnpm --version
             bash /tmp/typescript-smoke.sh
             go version; rustc -V; cargo -V; cargo clippy -V; rustfmt --version
             java -version; mvn -v; gradle --version

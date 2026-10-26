@@ -22,6 +22,33 @@ for (const path of ['Dockerfile', 'tests/Dockerfile']) {
   });
 }
 
+test('Python base is pinned to a Python 3.13 bookworm release', () => {
+  const match = dockerfile.match(/^FROM python:(\d+)\.(\d+)\.(\d+)-slim-bookworm$/m);
+  assert.ok(match, 'Python base must use an exact bookworm-slim release tag');
+  const [major, minor, patch] = match.slice(1, 4).map(Number);
+  assert.equal(major, 3, `Python base must stay on the 3.x line, got ${major}.${minor}.${patch}`);
+  assert.equal(minor, 13, `Python base must be 3.13, got ${major}.${minor}.${patch}`);
+  assert.ok(patch >= 17, `Python ${major}.${minor}.${patch} predates the 3.13.17 security release`);
+});
+
+test('build and container smoke assert the exact pinned Python version', () => {
+  const version = dockerfile.match(/^FROM python:(\d+\.\d+\.\d+)-slim-bookworm$/m)?.[1];
+  assert.ok(version, 'Missing exact Python base version');
+  const assertion = `test "$(python -V 2>&1)" = "Python ${version}"`;
+  const body = dockerfile.match(/\$sh '([^']+)'/)?.[1] ?? '';
+  assert.ok(body.includes(assertion), `Build smoke does not assert Python ${version}`);
+  const smoke = read('tests/image-smoke.sh');
+  assert.ok(smoke.includes(assertion), `Image smoke does not assert Python ${version}`);
+});
+
+test('Python stdlib native modules load before runtime', () => {
+  const body = dockerfile.match(/\$sh '([^']+)'/)?.[1] ?? '';
+  const importCheck = 'python -c "import bz2, ctypes, lzma, sqlite3, ssl, uuid"';
+  for (const [label, source] of [['Build smoke', body], ['Image smoke', read('tests/image-smoke.sh')]]) {
+    assert.ok(source.includes(importCheck), `${label} does not load the required stdlib native modules`);
+  }
+});
+
 test('image defaults to the current Java LTS line', () => {
   assert.match(dockerfile, /^ARG JDK_VERSION=25$/m);
 });
