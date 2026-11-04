@@ -1,26 +1,26 @@
 {
   "package": "@deepseek-ai/dsh-subagent",
-  "version": "0.2.1-rc.2",
+  "version": "0.2.2-rc.1",
   "files": {
     "lib/index.js": {
-      "beforeSha256": "9a9572e70fffdb100deb63326167f32bbf63016ce49c0017495dabcb95b44168",
-      "afterSha256": "5b8c7121469eeb02b99719fd9e37f5a62348442a20eab5998827d9a9df5f1993"
+      "beforeSha256": "5aad8aadee1879f1e8a878431630f885adbe6f9ee9cb1832838abbc56bc1fbea",
+      "afterSha256": "156c2caf9e644cb9591afb7037d038e4df1451ef2f8d816a57f5766ee150f4d3"
     },
     "lib/types/index.js": {
-      "beforeSha256": "e116c7cf57e9c4952a225ee2937faced2877af11fe2cf003ee519543561e8ad5",
-      "afterSha256": "3129655a18c98470f69bbfc3a46d65904c4917156a87d9fa1bd349029e1f398f"
+      "beforeSha256": "1cd7e0e9099aa2ab4db9099826c790a0af6bb034c5af63954c1f8f85259d38ea",
+      "afterSha256": "f5a445021036a8d85214eb59682d7489c23f872a724f368f9a88d58be948853f"
     },
     "lib/types/manager.js": {
-      "beforeSha256": "3f7dd4199579b2555acf59482d84dc567cf69ad32271435996fd370a2d1ecdba",
-      "afterSha256": "f02dd3b34fb7c1efeeeb09210272a84bb3e250b1c1f4781905bb8dccc88c5f73"
+      "beforeSha256": "81151f275a9b7703323b3d992036827fccdae2270bec6e4cbba9338499676df8",
+      "afterSha256": "9d105da371057bf02949ec830d04707258c3617d8e2b68040953742204f4f053"
     },
     "lib/types/types.d.ts": {
       "beforeSha256": "725145479cd332c4ea6ff6b830e696b3e4976173dbb1ab3d57f432a2fbaefd03",
       "afterSha256": "ba5bf5b65e3444fedfbb8174bb5e8cb71fcd8fdd53b6289025f663bd860a5e18"
     },
     "lib/types/index.d.ts": {
-      "beforeSha256": "bc0a78235eeb39586769204d70ed8a69cb2a26fe2893cb716b142455c9d705a5",
-      "afterSha256": "df3badfd6f54dd336c14cc26408a2b2bb61d8bfa832c3aa617e6d8a9964d8d23"
+      "beforeSha256": "8c14f1b72c4ef02650ca3903818328e241712273325367d73134abfc1ba4d33d",
+      "afterSha256": "b99134a1c18d9bb9294f9714f000240ec40fdb4d411c201d3bbdfec83f70b2c8"
     },
     "lib/types/manager.d.ts": {
       "beforeSha256": "25f1f59b3acf4474db3b79c5fbdb7c7044d74936ce63c4c4aea9657cf51e7189",

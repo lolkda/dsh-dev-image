@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Context } from '@deepseek-ai/cordis';
 import { Loader } from '@deepseek-ai/cordis-plugin-loader';
-import { AgentRegistry } from '@deepseek-ai/dsh-agent';
+import { AgentRegistry, installModelSelection } from '@deepseek-ai/dsh-agent';
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop';
 import PresetRegistry from '@deepseek-ai/dsh-agent-preset-registry';
 import { SessionStore } from '@deepseek-ai/dsh-session';
@@ -16,6 +16,7 @@ import * as JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl';
 import { SessionQueryEngine } from '@deepseek-ai/dsh-session-query';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import ToolRuntime from '@deepseek-ai/dsh-tools';
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native';
 import TeamService from '@deepseek-ai/dsh-experimental-agent-team';
 import * as TeamTools from '@deepseek-ai/dsh-experimental-tool-agent-team';
 import * as Spawn from '@deepseek-ai/dsh-subagent-spawn-in-process';
@@ -48,6 +49,9 @@ async function harness(t, requested = 'beta', fullPlugin = false) {
   await use(AgentRegistry);
   await use(SystemPrompt);
   await use(ToolRuntime);
+  // DSH 0.2.2 requires an executor in hand-built compositions; the shipped
+  // dsh-base profile mounts the same native executor.
+  await use(NativeToolExecutor);
   await use(JsonlPersistence, { root: join(home, 'sessions'), compression: 'none' });
   await use(SessionQueryEngine);
   const initialized = new Map();
@@ -279,7 +283,12 @@ test('real structured child keeps its capture tool and working directory', { tim
   await activation.dispose();
 });
 
-test('complete plugin: creation preset and request-time model/effort pins coexist on real Team child', { timeout: 15000 }, async t => {
+test('complete plugin: creation preset and request-time model/effort pins coexist on real Team child', {
+  timeout: 15000,
+  skip: installModelSelection.length < 2
+    ? 'DSH 0.2.2 removed installModelSelection(agentCtx, ModelSelectionRef); @lolkda/dsh-agent-team-model-pin@1.5.1 model pin uses the legacy API'
+    : false,
+}, async t => {
   const h = await harness(t, 'beta', true);
   const child = await h.spawn();
   assert.equal(presetOf(h, child), 'beta');

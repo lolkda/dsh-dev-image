@@ -1,6 +1,6 @@
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -1804,7 +1804,33 @@
+@@ -1810,7 +1810,33 @@
  					await workingDirectory.set(child, create.cwd, inputs.signal);
  				}
  				if (inputs.composition.agentPreset === void 0) await applyChildComposition(childCtx, parent, inputs.composition);
@@ -34,15 +34,15 @@
  			};
  			const handle = create === void 0 ? await this.ownerCtx.agents.resume({
  				resumeSessionId: childId,
-@@ -2981,6 +3007,7 @@
+@@ -2995,6 +3021,7 @@
  		});
- 		static inject = ["workingDirectory"];
+ 		static inject = ["workingDirectory", "sessionProjections"];
  		providers = /* @__PURE__ */ new Map();
 +		childSetupHooks = new Set();
  		manager;
  		/**
  		* The contained lifecycle-edge publisher. Built here because scoped dispatch
-@@ -2998,7 +3025,8 @@
+@@ -3012,7 +3039,8 @@
  						return this.expectProvider(name).start(request);
  					},
  					prepareContinuable: (name, request) => this.prepareContinuable(name, request),
@@ -52,9 +52,9 @@
  				}, () => this.config.maxActiveSubagents.get());
  				this.manager = manager;
  				childCtx.effect(() => () => {
-@@ -3015,6 +3043,47 @@
- 				installSubagentArchiveAdmission(agentsCtx);
- 			});
+@@ -3030,6 +3058,47 @@
+ 			await sessionProjections.register(subagentTimingProjectionDefinition);
+ 			await sessionProjections.register(subagentIdentityProjectionDefinition);
  		}
 +		/** Versioned, native, pre-publication continuable-child setup capability. */
 +		get childSetupVersion() { return 1; }
@@ -102,15 +102,15 @@
  		* @param configured - Explicit tool limit, or provider-managed for external delegation.
 --- a/lib/types/index.js
 +++ b/lib/types/index.js
-@@ -77,6 +77,7 @@
+@@ -78,6 +78,7 @@
          });
-         static inject = ['workingDirectory'];
+         static inject = ['workingDirectory', 'sessionProjections'];
          providers = new Map();
 +        childSetupHooks = new Set();
          manager;
          /**
           * The contained lifecycle-edge publisher. Built here because scoped dispatch
-@@ -96,6 +97,7 @@
+@@ -97,6 +98,7 @@
                      },
                      prepareContinuable: (name, request) => this.prepareContinuable(name, request),
                      observeActivation: (provider, childId, parent) => this.observeActivation(provider, childId, parent),
@@ -118,9 +118,9 @@
                  }, () => this.config.maxActiveSubagents.get());
                  this.manager = manager;
                  childCtx.effect(() => () => {
-@@ -113,6 +115,47 @@
-             // children descend from a Session and how a parent stops them.
-             ctx.inject(['agents'], (agentsCtx) => { installSubagentArchiveAdmission(agentsCtx); });
+@@ -115,6 +117,47 @@
+             await sessionProjections.register(subagentTimingProjectionDefinition);
+             await sessionProjections.register(subagentIdentityProjectionDefinition);
          }
 +        /** Versioned, native, pre-publication continuable-child setup capability. */
 +        get childSetupVersion() { return 1; }
@@ -240,11 +240,11 @@
  export { foldSubagentDescriptor, snapshotSubagentDescriptor, SUBAGENT_DESCRIPTOR_VERSION, } from './descriptor.ts';
  export type { ContinuableSubagentDescriptorData, ContinuableSubagentDescriptorInput, OneShotSubagentDescriptorData, SubagentDescriptorData, } from './descriptor.ts';
  export { STRUCTURED_OUTPUT_TOOL } from './structured.ts';
-@@ -121,6 +121,11 @@
-      */
+@@ -122,6 +122,11 @@
      private readonly emitLifecycle;
      constructor(ctx: Context, config: Config);
-+    /** Native unpublished continuable child setup protocol; absent in stock alpha.2. */
+     protected [Service.init](): Promise<void>;
++    /** Native unpublished continuable child setup protocol; absent in stock DSH. */
 +    readonly childSetupVersion: 1;
 +    registerChildSetup(callback: import('./types.ts').ChildSetupCallback): () => void;
 +    private childSetupHooks;
