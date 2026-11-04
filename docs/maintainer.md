@@ -28,8 +28,11 @@
 | `ANDROID_SDK_PLATFORM` | `37.2` | 安装为 `platforms;android-37.2` |
 | `ANDROID_BUILD_TOOLS_VERSION` | `37.0.0` | PATH 中也写死了这个目录 |
 | `ANDROID_PLATFORM_TOOLS_VERSION` | `37.0.1` | 构建期校验 |
+| `ANDROID_NDK_VERSION` | `30.0.16248370` | r30；通过 sdkmanager 安装，校验 Pkg.Revision；ENV 路径从此参数展开 |
 
-升级 Android 组件时，除了改 ARG，还要同步 `ENV PATH`、`/etc/profile.d/00-dsh-path.sh` 和文档中的路径；构建期的 `source.properties` 校验会兜底。
+升级 Android SDK 组件时，除了改 ARG，还要同步 `ENV PATH`、`/etc/profile.d/00-dsh-path.sh` 和文档中的路径；构建期的 `source.properties` 校验会兜底。NDK 路径从 `ANDROID_NDK_VERSION` 展开，不在 Compose/CI 重复版本。入口和登录 Shell 共用 [ndk-env.sh](<../ndk-env.sh>)，ENV 同时提供裸 docker exec 所需路径；NDK 工具追加到主机工具之后。显式覆盖 NDK_HOME 时使用实际环境变量 `ANDROID_NDK_HOME`。
+
+[NDK 冒烟](<../tests/android-ndk-smoke.sh>)会校验版本、工具来源和 CMake toolchain，并实际编译 C++20 / Android arm64 / API 28 的 JNI 共享库，用 llvm-readelf 检查 DYN、AArch64 和 JNI_OnLoad；不在宿主运行 Android 二进制、不启动 ADB daemon。构建期两种 Shell、运行期两种 Shell以及裸 docker exec 均执行，arm64 镜像跳过并保持不提供 NDK 的明确边界。
 
 Node / Rust 更换版本时必须继续使用 bookworm 变体（glibc 2.36）。Python base 固定到精确补丁版本，避免 `3.13-slim` 漂移。Java 和 Go 使用官方 tarball，不跨阶段 COPY，原因见下文。
 
@@ -69,7 +72,7 @@ PR 只测试 amd64、不推送；发布时两个架构都必须通过。`ci-<run
 
 非 PR 发布缺少任一 secret 会失败；PR 不需要这些凭据。token 是否存在由前置检查验证，token 是否有效只能靠实际登录和推送验证。
 
-单平台构建上限 90 分钟。Android SDK 解压后约 500 MB，加上 Gradle、Go、JDK 和 apt 层，压缩镜像预计 1.6–1.7 GB。
+单平台构建上限 90 分钟。Android SDK 解压后约 500 MB；新增 NDK 的 amd64 镜像会显著增加下载量和体积，旧的 1.6–1.7 GB 压缩镜像估算不再适用。最终大小以本次 CI 产物为准，不把未构建的估计当成验证结果。
 
 ## 回归测试
 
@@ -78,9 +81,10 @@ PR 只测试 amd64、不推送；发布时两个架构都必须通过。`ci-<run
 ```bash
 node --test tests/*.test.mjs
 npm run verify-notes
-for script in entrypoint.sh cli-env.sh tests/*.sh; do bash -n "$script"; done
-shellcheck entrypoint.sh cli-env.sh tests/*.sh
+for script in entrypoint.sh cli-env.sh ndk-env.sh tests/*.sh; do bash -n "$script"; done
+shellcheck entrypoint.sh cli-env.sh ndk-env.sh tests/*.sh
 sh -n cli-env.sh
+sh -n ndk-env.sh
 node --check home-init.mjs
 ```
 

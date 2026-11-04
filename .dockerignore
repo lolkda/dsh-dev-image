@@ -8,6 +8,9 @@
 !entrypoint.sh
 !home-init.mjs
 !cli-env.sh
+!ndk-env.sh
+!tests/
+!tests/android-ndk-smoke.sh
 !apktool.sh
 !patches/
 !patches/**

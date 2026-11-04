@@ -78,6 +78,12 @@ main() {
                 sdkmanager --list_installed 2>/dev/null | grep -F "build-tools/37.0.0" >/dev/null
                 sdkmanager --list_installed 2>/dev/null | grep -F "platforms/android-37.2" >/dev/null
                 sdkmanager --list_installed 2>/dev/null | grep -F "platform-tools" >/dev/null
+                /usr/local/libexec/dsh-android-ndk-smoke
+            else
+                if command -v ndk-build >/dev/null 2>&1; then
+                    echo "non-amd64 image unexpectedly provides a bundled NDK" >&2
+                    exit 1
+                fi
             fi
             (cd /tmp && apktool --version)
             (cd /tmp && frida --version && frida-ps --help >/dev/null && frida-trace --help >/dev/null && frida-ls-devices --help >/dev/null)
@@ -220,7 +226,10 @@ main() {
             | grep -F "Android Asset Packaging Tool" >/dev/null
         docker exec --workdir /tmp "$web_id" sh -ec \
             'test "$(command -v adb)" = "$ANDROID_HOME/platform-tools/adb"'
-        printf 'Verified Android SDK CLIs over bare docker exec from /tmp\n'
+        docker exec --workdir /tmp "$web_id" ndk-build --version
+        docker exec --workdir /tmp "$web_id" aarch64-linux-android28-clang++ --version
+        docker exec --workdir /tmp "$web_id" /usr/local/libexec/dsh-android-ndk-smoke
+        printf 'Verified Android SDK/NDK CLIs and arm64 shared library over bare docker exec from /tmp\n'
     else
         printf 'Skipped native Android SDK assertions on non-amd64 image\n'
     fi

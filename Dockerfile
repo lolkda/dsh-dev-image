@@ -48,6 +48,7 @@ ARG ANDROID_CMDLINE_TOOLS_SHA256=0877a1d048fe4a24efe2eff536ca4223f7adeb58648bb81
 ARG ANDROID_SDK_PLATFORM=37.2
 ARG ANDROID_BUILD_TOOLS_VERSION=37.0.0
 ARG ANDROID_PLATFORM_TOOLS_VERSION=37.0.1
+ARG ANDROID_NDK_VERSION=30.0.16248370
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -138,6 +139,18 @@ ENV JAVA_HOME=/opt/java \
     PATH=/app/.cache/cargo/bin:/app/.cache/go/bin:/opt/java/bin:/opt/maven/bin:/opt/gradle/bin:/opt/android-sdk/build-tools/37.0.0:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin:/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # -----------------------------------------------------------------------------
+# NDK 的 PATH 必须在 ENV 中提供，裸 docker exec 不会运行 entrypoint/profile。
+# 追加而非置顶，避免覆盖现有主机工具；arm64 镜像不安装这些目录。
+ENV ANDROID_NDK_VERSION=${ANDROID_NDK_VERSION}
+ENV ANDROID_NDK_HOME=/opt/android-sdk/ndk/${ANDROID_NDK_VERSION}
+ENV PATH="${PATH}:${ANDROID_NDK_HOME}:${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+COPY ndk-env.sh /usr/local/bin/ndk-env.sh
+COPY tests/android-ndk-smoke.sh /usr/local/libexec/dsh-android-ndk-smoke
+RUN chmod 0644 /usr/local/bin/ndk-env.sh \
+    && chmod 0755 /usr/local/libexec/dsh-android-ndk-smoke \
+    && sh -n /usr/local/bin/ndk-env.sh
+
+# -----------------------------------------------------------------------------
 # 修复登录 shell 丢 PATH —— 这是个真实故障，不是理论问题
 #
 # Debian 的 /etc/profile 会【硬编码覆盖】PATH，完全忽略继承值：
@@ -173,6 +186,7 @@ RUN set -eux; \
         '        *) [ -d "$d" ] && PATH="$d:$PATH" ;;' \
         '    esac' \
         'done' \
+        '. /usr/local/bin/ndk-env.sh' \
         'export PATH' \
         > /etc/profile.d/00-dsh-path.sh; \
     chmod 0644 /etc/profile.d/00-dsh-path.sh
@@ -249,11 +263,12 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # Android SDK —— 编译 APK 与真机调试
 #
-# 只装编译和调试真正用到的四块，不装 NDK、模拟器或 system-image：
-#   cmdline-tools  ← sdkmanager 本体，用来安装下面三个
+# 安装 APK/JNI 编译和调试使用的 SDK 与 NDK，不装模拟器或 system-image：
+#   cmdline-tools  ← sdkmanager 本体
 #   platform-tools ← adb、fastboot
 #   build-tools    ← aapt2、d8、apksigner、zipalign
 #   platforms      ← 对应 compileSdk 的 android.jar
+#   ndk            ← Clang、Android sysroot、JNI 头文件与 CMake toolchain
 #
 # 版本全部钉在 ARG 里，不用 sdkmanager 的隐式 latest：今天能构建、明天因
 # 上游更新而失败，是比多写一行版本号更贵的故障。升级时同时改 ARG、PATH 中
@@ -289,7 +304,11 @@ RUN set -eux; \
     sdkmanager --install \
         "platforms;android-${ANDROID_SDK_PLATFORM}" \
         "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
-        "platform-tools"; \
+        "platform-tools" \
+        "ndk;${ANDROID_NDK_VERSION}"; \
+    test "$(sed -n 's/^Pkg\.Revision[[:space:]]*=[[:space:]]*//p' "$ANDROID_NDK_HOME/source.properties")" = "$ANDROID_NDK_VERSION"; \
+    test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"; \
+    test -x "$ANDROID_NDK_HOME/ndk-build"; \
     grep -Fx "Pkg.Revision=${ANDROID_CMDLINE_TOOLS_VERSION}" \
         "$ANDROID_HOME/cmdline-tools/latest/source.properties"; \
     grep -Fx "Pkg.Revision=${ANDROID_PLATFORM_TOOLS_VERSION}" \
@@ -543,6 +562,7 @@ RUN set -eux; \
                  fastboot --version; \
                  aapt2 version; \
                  apksigner version; \
+                  /usr/local/libexec/dsh-android-ndk-smoke; \
              else \
                  adb version; \
              fi; \

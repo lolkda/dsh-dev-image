@@ -28,6 +28,7 @@ ENV HOME=/app/.home \
 COPY entrypoint.sh /usr/local/bin/dsh-entrypoint
 COPY home-init.mjs /usr/local/bin/home-init.mjs
 COPY cli-env.sh /usr/local/bin/cli-env.sh
+COPY ndk-env.sh /usr/local/bin/ndk-env.sh
 RUN chmod 0755 /usr/local/bin/dsh-entrypoint \
     && chmod 0644 /usr/local/bin/cli-env.sh \
     && ln -s /usr/local/bin/cli-env.sh /etc/profile.d/10-dsh-cli.sh

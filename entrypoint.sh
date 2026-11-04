@@ -92,6 +92,8 @@ node_command=/usr/local/bin/node
 "$node_command" "$script_dir/home-init.mjs" "$HOME" /etc/skel || fatal '持久化 HOME 初始化失败；检查目录类型与 FOWNER 权限。'
 # shellcheck source=cli-env.sh
 source "$script_dir/cli-env.sh" || fatal '用户级 CLI 环境配置无效。'
+# shellcheck source=ndk-env.sh
+source "$script_dir/ndk-env.sh" || fatal 'NDK 环境配置无效。'
 
 # 缓存与安装产物分开：清理 .cache 不应删除新安装的用户 CLI。
 cli_dirs=(
