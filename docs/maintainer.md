@@ -28,7 +28,7 @@
 | `ANDROID_SDK_PLATFORM` | `37.2` | 安装为 `platforms;android-37.2` |
 | `ANDROID_BUILD_TOOLS_VERSION` | `37.0.0` | PATH 中也写死了这个目录 |
 | `ANDROID_PLATFORM_TOOLS_VERSION` | `37.0.1` | 构建期校验 |
-| `ANDROID_NDK_VERSION` | `30.0.16248370` | r30；通过 sdkmanager 安装，校验 Pkg.Revision；ENV 路径从此参数展开 |
+| `ANDROID_NDK_VERSION` | `29.0.14206865` | r29；通过 sdkmanager 安装，校验 Pkg.Revision；ENV 路径从此参数展开；平台上限 API 35 |
 
 升级 Android SDK 组件时，除了改 ARG，还要同步 `ENV PATH`、`/etc/profile.d/00-dsh-path.sh` 和文档中的路径；构建期的 `source.properties` 校验会兜底。NDK 路径从 `ANDROID_NDK_VERSION` 展开，不在 Compose/CI 重复版本。入口和登录 Shell 共用 [ndk-env.sh](<../ndk-env.sh>)，ENV 同时提供裸 docker exec 所需路径；NDK 工具追加到主机工具之后。显式覆盖 NDK_HOME 时使用实际环境变量 `ANDROID_NDK_HOME`。
 

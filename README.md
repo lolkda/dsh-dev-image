@@ -58,7 +58,7 @@ docker compose run --rm agent dsh tui
 | Java | Temurin 25.0.5+8（LTS），Maven 3.9.16，Gradle 9.7.1 |
 | DSH | 0.2.2-rc.1 |
 | Android SDK | 仅 amd64：Platform 37.2，Build-Tools 37.0.0，Platform-Tools 37.0.1；arm64 只有 Debian `adb` |
-| Android NDK | 仅 amd64：r30（30.0.16248370），含 Clang、JNI 头文件、Android sysroot 和 CMake toolchain；可交叉编译 Android arm64 |
+| Android NDK | 仅 amd64：r29（29.0.14206865），含 Clang、JNI 头文件、Android sysroot 和 CMake toolchain；可交叉编译 Android arm64 |
 | APK / 插桩 | `apktool` 2.12.1，`frida` 17.23.1，`frida-tools` 14.11.0 |
 | 常用 CLI | git、git-lfs、gh、rg、jq、yq 4.53.6、sqlite3、file、xxd、less、tmux、cmake、ninja、gdb、strace、shellcheck |
 
@@ -88,7 +88,7 @@ apksigner version
 
 完整 SDK 只在 amd64 镜像中安装。arm64 镜像保留 Debian `adb` 作为调试兜底，不能编译 APK。项目需使用 `compileSdk = 37`、`compileSdkMinor = 2`、`buildToolsVersion = "37.0.0"`。
 
-amd64 镜像还包含 NDK r30，`ANDROID_NDK_HOME` 指向 `/opt/android-sdk/ndk/30.0.16248370`：
+amd64 镜像还包含 NDK r29，`ANDROID_NDK_HOME` 指向 `/opt/android-sdk/ndk/29.0.14206865`：
 
 ```bash
 ndk-build --version
@@ -98,7 +98,9 @@ aarch64-linux-android28-clang++ --version
 # -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28
 ```
 
-普通 Shell、登录 Shell 和裸 `docker exec` 均可找到 NDK 工具；Gradle 项目仍应显式固定 `ndkVersion = "30.0.16248370"`。NDK 路径追加到 PATH，不抢占已有主机编译工具；使用其他已安装 NDK 时可显式设置 `ANDROID_NDK_HOME`，入口/登录 Shell 会替换继承的镜像 NDK 路径。裸 exec 若单独覆盖该变量，还需显式提供对应 PATH 或使用绝对工具路径。
+普通 Shell、登录 Shell 和裸 `docker exec` 均可找到 NDK 工具；Gradle 项目仍应显式固定 `ndkVersion = "29.0.14206865"`。NDK 路径追加到 PATH，不抢占已有主机编译工具；使用其他已安装 NDK 时可显式设置 `ANDROID_NDK_HOME`，入口/登录 Shell 会替换继承的镜像 NDK 路径。裸 exec 若单独覆盖该变量，还需显式提供对应 PATH 或使用绝对工具路径。
+
+> NDK r29 的平台支持上限是 **API 35**。`compileSdk = 37` 的 Java/Kotlin 构建不受影响，但 native 代码不能使用 API 36/37 的新接口；这类项目需要改用 r30。
 
 不包含模拟器或 system-image；默认 Compose 也没有映射宿主 USB 设备。SDK/NDK 在镜像层，升级后必须拉取新镜像并重建容器，单纯 restart 不会更新。arm64 主机镜像仍不提供 NDK；这与 amd64 镜像交叉编译 Android arm64 是两回事。
 

@@ -9,7 +9,7 @@ import { test } from 'node:test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = name => readFileSync(join(root, name), 'utf8');
 const helper = join(root, 'ndk-env.sh');
-const ndkVersion = '30.0.16248370';
+const ndkVersion = '29.0.14206865';
 
 function fixture(t) {
   const parent = resolve(tmpdir());
