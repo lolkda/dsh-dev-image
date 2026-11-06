@@ -44,6 +44,7 @@ main() {
             -e DSH_PLUGINS= "$image" bash "$mode" '
             set -euo pipefail
             test "$(id -u):$(id -g)" = 0:0
+            test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.41"
             test "$HOME" = /app/.home
             test "$(getent passwd root | cut -d: -f6)" = "$HOME"
             test -d "$HOME" && test ! -L "$HOME"

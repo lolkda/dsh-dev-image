@@ -48,7 +48,7 @@ docker compose run --rm agent dsh tui
 
 | 类别 | 内容 |
 |---|---|
-| 基础 | Debian 12 bookworm，glibc 2.36 |
+| 基础 | Debian 13 trixie，glibc 2.41 |
 | Python | 3.13.17 |
 | Node | 24.22.1，含 npm、Yarn Classic、corepack |
 | pnpm | 12.4.2 |

@@ -3,7 +3,7 @@
 # =============================================================================
 #  dev-agent —— 通用开发镜像（Python / Node / TypeScript / Java / Rust / Go / git / DSH）
 #
-#  base 选 python:3.13.17-slim-bookworm 而不是裸 debian:bookworm-slim，是刻意的：
+#  base 选 python:3.13.17-slim-trixie 而不是裸 debian:trixie-slim，是刻意的：
 #
 #    官方 python 镜像构建时会用 ldd 反查 python 二进制实际依赖的 .so，把提供
 #    这些库的 apt 包（libexpat1 / libffi8 / libsqlite3-0 / liblzma5 / libbz2-1.0 /
@@ -12,21 +12,21 @@
 #    都不会在，`import sqlite3` / `ssl` / `ctypes` 全部 ImportError，且报错很晚、
 #    很难查。
 #
-#    python:3.13.17-slim-bookworm 本身就是 debian 12 bookworm（glibc 2.36），
+#    python:3.13.17-slim-trixie 本身就是 debian 13 trixie（glibc 2.41），
 #    所以它既是 debian base，又白送了 python 的完整运行时。
 #
 #  glibc 规则（改版本时必读）：
-#    被 COPY 的来源镜像 glibc 必须 <= base 的 2.36。
-#    node / rust 都取 bookworm 变体（2.36）—— 相等，安全。
+#    被 COPY 的来源镜像 glibc 必须 <= base 的 2.41。
+#    node / rust 都取 trixie 变体（2.41）—— 相等，安全。
 #    Go / Java / Maven / Gradle / yq 走官方 tarball，原因见各自段落。
 # =============================================================================
 
 # ---- 运行时来源层：只用于 COPY，不进入最终镜像 ------------------------------
-FROM node:24.22.1-bookworm-slim AS src-node
-FROM rust:1.98.1-slim-bookworm  AS src-rust
+FROM node:24.22.1-trixie-slim AS src-node
+FROM rust:1.98.1-slim-trixie AS src-rust
 
 # ---- 最终镜像 ---------------------------------------------------------------
-FROM python:3.13.17-slim-bookworm
+FROM python:3.13.17-slim-trixie
 
 ARG GO_VERSION=1.27.1
 ARG JDK_VERSION=25
@@ -79,7 +79,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # 才能链接产物。
 #
 # libatomic1：node 官方镜像显式装了它（注释写 "libatomic1 for arm"），arm64 需要。
-# xxd：bookworm 里是独立包，**不在 vim-common 里**（trixie 才拆出来的说法是反的）。
+# xxd：trixie 里仍是独立包，**不在 vim-common 里**。
 # 不装 tree / fd-find / vim / man-db：Agent 的 read/glob/edit 已覆盖目录浏览、
 # 文本编辑和交互分页；`file`、`xxd` 和 `less` 保留，分别用于二进制识别、
 # 十六进制查看和 git 分页。
@@ -233,10 +233,10 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # Java —— 走 Adoptium 官方 tarball，不用 COPY
 #
-# 为什么不用 eclipse-temurin：它的 Debian 变体跟随发行版，JDK 24 时期只有
-# noble 变体（`24-jdk-jammy` 已 404），noble 的 glibc 是 2.39 > base 的 2.36，
-# COPY 进来会炸。Adoptium 的 Linux tarball 面向 glibc 2.17+ 构建，放进
-# bookworm 安全，换 JDK_VERSION 时 base 完全不用动。
+# 为什么不用 eclipse-temurin：它的 Debian 变体跟随发行版，跨发行版 COPY 会
+# 把来源镜像的 glibc 依赖带进来（JDK 24 时期只有 noble 变体，且
+# `24-jdk-jammy` 已 404）。Adoptium 的 Linux tarball 面向 glibc 2.17+ 构建，
+# 放进 trixie 安全，换 JDK_VERSION 时 base 完全不用动。
 #
 # 默认 JDK 25（LTS）。24 是 non-LTS 且已 EOL；26 / 27 也按需可换。
 #
@@ -369,7 +369,7 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # Gradle —— 走官方 distribution，不用 apt
 #
-# Debian bookworm 的 gradle 是 **4.4.1**（2017 年的），现代项目根本用不了。
+# Debian trixie 的 gradle 是 **4.4.1**（2017 年的），现代项目根本用不了。
 # 官方 zip 带 sha256 校验。
 # -----------------------------------------------------------------------------
 RUN set -eux; \
@@ -438,7 +438,7 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # yq v4 —— 走官方二进制，不用 apt
 #
-# Debian bookworm 的 yq 是 **3.1.0**，那是 Python 版、语法和 mikefarah v4
+# Debian trixie 的 yq 是 **3.4.3**，那是 Python 版、语法和 mikefarah v4
 # 完全不同（`yq -y` vs `yq -o=yaml`）。装错了比不装更坑，所以取官方 v4。
 #
 # 校验和不能按列取：yq 的 checksums 文件不是 `<hash>  <file>`，而是
@@ -538,7 +538,8 @@ RUN set -eux; \
     for sh in "bash -ec" "bash -lec"; do \
         echo "=== 用 [$sh] 验证 ==="; \
         $sh 'set -euo pipefail; \
-              test "$(python -V 2>&1)" = "Python 3.13.17"; \
+             test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.41"; \
+             test "$(python -V 2>&1)" = "Python 3.13.17"; \
              python -c "import bz2, ctypes, lzma, sqlite3, ssl, uuid"; \
              node -v; npm -v; yarn --version; pnpm --version; \
              tsc --version; tsx --version; \

@@ -11,9 +11,9 @@ const defaultPlugins = '@lolkda/dsh-web-lan@latest';
 
 // 基础镜像必须写死精确版本：`node:24` 会随 registry 漂移，安全修复无法审计。
 for (const path of ['Dockerfile', 'tests/Dockerfile']) {
-  test(`${path}: Node base is pinned to a patched bookworm release`, () => {
-    const match = read(path).match(/^FROM node:(\d+)\.(\d+)\.(\d+)-bookworm-slim(?:\s+AS\s+\S+)?$/m);
-    assert.ok(match, `${path}: Node base must use an exact bookworm-slim release tag`);
+  test(`${path}: Node base is pinned to a patched trixie release`, () => {
+    const match = read(path).match(/^FROM node:(\d+)\.(\d+)\.(\d+)-trixie-slim(?:\s+AS\s+\S+)?$/m);
+    assert.ok(match, `${path}: Node base must use an exact trixie-slim release tag`);
     const [major, minor, patch] = match.slice(1, 4).map(Number);
     const atLeastSecurityFloor = major > 24
       || (major === 24 && (minor > 22 || (minor === 22 && patch >= 1)));
@@ -22,17 +22,33 @@ for (const path of ['Dockerfile', 'tests/Dockerfile']) {
   });
 }
 
-test('Python base is pinned to a Python 3.13 bookworm release', () => {
-  const match = dockerfile.match(/^FROM python:(\d+)\.(\d+)\.(\d+)-slim-bookworm$/m);
-  assert.ok(match, 'Python base must use an exact bookworm-slim release tag');
+test('Python base is pinned to a Python 3.13 trixie release', () => {
+  const match = dockerfile.match(/^FROM python:(\d+)\.(\d+)\.(\d+)-slim-trixie$/m);
+  assert.ok(match, 'Python base must use an exact trixie-slim release tag');
   const [major, minor, patch] = match.slice(1, 4).map(Number);
   assert.equal(major, 3, `Python base must stay on the 3.x line, got ${major}.${minor}.${patch}`);
   assert.equal(minor, 13, `Python base must be 3.13, got ${major}.${minor}.${patch}`);
   assert.ok(patch >= 17, `Python ${major}.${minor}.${patch} predates the 3.13.17 security release`);
 });
 
+test('all image stages use Debian 13 trixie for glibc 2.41', () => {
+  for (const path of ['Dockerfile', 'tests/Dockerfile']) {
+    assert.doesNotMatch(read(path), /bookworm/i, `${path} still references bookworm`);
+  }
+  assert.match(dockerfile, /^FROM python:3\.13\.17-slim-trixie$/m);
+  assert.match(dockerfile, /^FROM node:24\.22\.1-trixie-slim AS src-node$/m);
+  assert.match(dockerfile, /^FROM rust:1\.98\.1-slim-trixie AS src-rust$/m);
+});
+
+test('build and image smoke assert glibc 2.41', () => {
+  const body = dockerfile.match(/\$sh '([^']+)'/)?.[1] ?? '';
+  const assertion = 'test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.41"';
+  assert.ok(body.includes(assertion), 'Build smoke does not assert glibc 2.41');
+  assert.ok(read('tests/image-smoke.sh').includes(assertion), 'Image smoke does not assert glibc 2.41');
+});
+
 test('build and container smoke assert the exact pinned Python version', () => {
-  const version = dockerfile.match(/^FROM python:(\d+\.\d+\.\d+)-slim-bookworm$/m)?.[1];
+  const version = dockerfile.match(/^FROM python:(\d+\.\d+\.\d+)-slim-trixie$/m)?.[1];
   assert.ok(version, 'Missing exact Python base version');
   const assertion = `test "$(python -V 2>&1)" = "Python ${version}"`;
   const body = dockerfile.match(/\$sh '([^']+)'/)?.[1] ?? '';

@@ -34,7 +34,7 @@
 
 [NDK 冒烟](<../tests/android-ndk-smoke.sh>)会校验版本、工具来源和 CMake toolchain，并实际编译 C++20 / Android arm64 / API 28 的 JNI 共享库，用 llvm-readelf 检查 DYN、AArch64 和 JNI_OnLoad；不在宿主运行 Android 二进制、不启动 ADB daemon。构建期两种 Shell、运行期两种 Shell以及裸 docker exec 均执行，arm64 镜像跳过并保持不提供 NDK 的明确边界。
 
-Node / Rust 更换版本时必须继续使用 bookworm 变体（glibc 2.36）。Python base 固定到精确补丁版本，避免 `3.13-slim` 漂移。Java 和 Go 使用官方 tarball，不跨阶段 COPY，原因见下文。
+Node / Rust 更换版本时必须继续使用 trixie 变体（glibc 2.41）。Python base 固定到精确补丁版本，避免 `3.13-slim` 漂移。Java 和 Go 使用官方 tarball，不跨阶段 COPY，原因见下文。
 
 ## 构建与发布
 
@@ -125,9 +125,9 @@ CI 在发布前执行这些步骤；没有实际运行 Docker 的本地检查不
 
 ## 设计取舍
 
-**base 用 `python:3.13.17-slim-bookworm`，不用裸 Debian。** 官方 Python 镜像会把 Python 实际依赖的 `.so` 所属 apt 包标记为 manual，并跑过 `ldconfig`。换成裸 Debian 再 COPY Python 的 `/usr/local`，`sqlite3` / `ssl` / `ctypes` 等模块会 ImportError。
+**base 用 `python:3.13.17-slim-trixie`，不用裸 Debian。** 官方 Python 镜像会把 Python 实际依赖的 `.so` 所属 apt 包标记为 manual，并跑过 `ldconfig`。换成裸 Debian 再 COPY Python 的 `/usr/local`，`sqlite3` / `ssl` / `ctypes` 等模块会 ImportError。
 
-**Java 不走 COPY。** eclipse-temurin 的 Debian 变体跟随发行版；JDK 24 时期只有 noble 变体（glibc 2.39 > base 的 2.36）。Adoptium tarball 面向 glibc 2.17+，换 JDK 版本不用动 base。
+**Java 不走 COPY。** eclipse-temurin 的 Debian 变体跟随发行版，跨发行版 COPY 会带入来源镜像的 glibc 依赖（JDK 24 时期只有 noble 变体，且 `24-jdk-jammy` 已 404）。Adoptium tarball 面向 glibc 2.17+，换 JDK 版本不用动 base。
 
 **Go 也不走 COPY。** golang 官方镜像的 `/usr/local/go` 是指向 `/target/usr/local/go` 的符号链接，跨阶段 COPY 对符号链接的处理依赖构建器，不可靠。
 
@@ -143,7 +143,7 @@ CI 在发布前执行这些步骤；没有实际运行 Docker 的本地检查不
 
 ## 升级检查清单
 
-- Node / Rust 来源镜像仍是 bookworm 变体。
+- Node / Rust 来源镜像仍是 trixie 变体。
 - Python base 仍是精确的 3.13 补丁版本。
 - Android 的 ARG、PATH、`profile.d` 和文档版本一致。
 - `APKTOOL_VERSION` 与 `APKTOOL_SHA256` 配套。
