@@ -10,7 +10,7 @@
 |---|---|---|
 | `GO_VERSION` | `1.27.1` | 官方 tarball；sha256 从 go.dev API 现取 |
 | `JDK_VERSION` | `25` | Adoptium feature version |
-| `DSH_VERSION` | `0.2.2-rc.1` | npm 版本号或 dist-tag |
+| `DSH_VERSION` | `0.2.2-rc.2` | npm 版本号或 dist-tag |
 | `PNPM_VERSION` | `12.4.2` | 全局安装 |
 | `TYPESCRIPT_VERSION` | `7.0.2` | 全局 `tsc` |
 | `TSX_VERSION` | `4.23.15` | 全局 `tsx` |

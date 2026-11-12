@@ -12,7 +12,7 @@ cleanup() {
 trap cleanup EXIT
 version="$(node -p "require(process.argv[1]).version" "$repo/patches/dsh-subagent-child-setup-v1.baseline.json")"
 npm install --prefix "$scratch" --ignore-scripts --no-audit --no-fund \
-  "@deepseek-ai/dsh@$version" '@lolkda/dsh-agent-team-model-pin@1.5.1'
+  "@deepseek-ai/dsh@$version" '@lolkda/dsh-agent-team-model-pin@1.7.0'
 subagent="$scratch/node_modules/@deepseek-ai/dsh-subagent"
 # Verify the actual installed package and every pristine/post-patch byte.
 node --input-type=module - "$repo" "$subagent" <<'NODE'
@@ -43,5 +43,5 @@ for (const [file, hashes] of Object.entries(baseline.files)) {
 }
 NODE
 mkdir -p "$scratch/tests"
-cp "$repo/tests/integration/team-preset.mjs" "$scratch/tests/team-preset.mjs"
-node --test "$scratch/tests/team-preset.mjs"
+cp "$repo/tests/integration/team-preset-rc2.mjs" "$scratch/tests/team-preset-rc2.mjs"
+node --test "$scratch/tests/team-preset-rc2.mjs"

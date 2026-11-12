@@ -144,12 +144,19 @@ for (const [runtimeFile, managerFile] of [['lib/index.js', 'lib/index.js'], ['li
     } };
     const prepared = { commit() { calls.push('commit'); } };
     const deps = {
-      create, parent, inputs: { signal: controller.signal, composition: {}, outputSchema: {} },
+      create, parent, inputs: { signal: controller.signal, root: parent, composition: overrides.composition ?? {}, outputSchema: {} },
       manager: { host: { async prepareChildSetup(payload) {
         assert.equal(payload.child, child); assert.equal(payload.parent, parent);
+        payload.signal.throwIfAborted();
         calls.push(payload.source); return prepared;
       } } },
-      compose: () => calls.push('compose'), policies: () => calls.push('policies'),
+      compose: (_ctx, _parent, composition) => {
+        if (composition.agentPreset === undefined) calls.push('compose');
+        else {
+          calls.push(`mount:${composition.agentPreset}`);
+          if (overrides.abortMount) controller.abort();
+        }
+      }, policies: () => calls.push('policies'),
       structured: () => { calls.push('structured'); return 'attachment'; },
     };
     return { ...setup(managerFile, deps), calls, child, ctx, prepared };
@@ -162,18 +169,19 @@ for (const [runtimeFile, managerFile] of [['lib/index.js', 'lib/index.js'], ['li
     f.prepared.commit();
     assert.equal(f.calls.at(-1), 'commit');
   });
-  test(`${managerFile}: cold resume restores own latest identity, without a selecting plugin`, async () => {
-    const f = flow(undefined, [{ type: 'agent-preset/selected', data: { agentPreset: 'old' } }, { type: 'agent-preset/selected', data: { agentPreset: 'beta' } }]);
+  test(`${managerFile}: cold resume applies the native preset composition before returning commit`, async () => {
+    const f = flow(undefined, [], 'beta', { composition: { agentPreset: 'beta' } });
     await f.setup(f.ctx, f.child);
-    assert.deepEqual(f.calls, ['compose', 'mount:beta', 'structured', 'resume']);
-    const fallback = flow(undefined);
-    await fallback.setup(fallback.ctx, fallback.child);
-    assert.deepEqual(fallback.calls, ['compose', 'mount:fallback', 'structured', 'resume']);
+    assert.deepEqual(f.calls, ['mount:beta', 'structured', 'resume']);
   });
-  test(`${managerFile}: invalid persisted selection and cancelled mount never invoke hooks`, async () => {
-    for (const f of [flow(undefined, [{ type: 'agent-preset/selected', data: { agentPreset: '' } }]), flow(undefined, [], 'fallback', { abortMount: true })]) {
-      await assert.rejects(f.setup(f.ctx, f.child));
-      assert.ok(!f.calls.includes('resume'));
-    }
+  test(`${managerFile}: resume without a saved preset uses host composition and still invokes hooks`, async () => {
+    const f = flow(undefined);
+    await f.setup(f.ctx, f.child);
+    assert.deepEqual(f.calls, ['compose', 'structured', 'resume']);
+  });
+  test(`${managerFile}: cancelled native preset mount never invokes hooks`, async () => {
+    const f = flow(undefined, [], 'fallback', { composition: { agentPreset: 'fallback' }, abortMount: true });
+    await assert.rejects(f.setup(f.ctx, f.child));
+    assert.ok(!f.calls.includes('resume'));
   });
 }

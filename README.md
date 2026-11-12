@@ -56,7 +56,7 @@ docker compose run --rm agent dsh tui
 | Rust | 1.98.1，含 `clippy` / `rustfmt` |
 | Go | 1.27.1 |
 | Java | Temurin 25.0.5+8（LTS），Maven 3.9.16，Gradle 9.7.1 |
-| DSH | 0.2.2-rc.1 |
+| DSH | 0.2.2-rc.2 |
 | Android SDK | 仅 amd64：Platform 37.2，Build-Tools 37.0.0，Platform-Tools 37.0.1；arm64 只有 Debian `adb` |
 | Android NDK | 仅 amd64：r29（29.0.14206865），含 Clang、JNI 头文件、Android sysroot 和 CMake toolchain；可交叉编译 Android arm64 |
 | APK / 插桩 | `apktool` 2.12.1，`frida` 17.23.1，`frida-tools` 14.11.0 |
