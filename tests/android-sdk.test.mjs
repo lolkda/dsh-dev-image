@@ -14,7 +14,7 @@ const expected = {
   cmdlineSha256: '0877a1d048fe4a24efe2eff536ca4223f7adeb58648bb81909d33c446918cfa8',
   platform: '37.2',
   buildTools: '37.0.0',
-  platformTools: '37.0.1',
+  platformTools: '37.0.3',
 };
 
 test('Android SDK component versions are pinned to the current stable releases', () => {

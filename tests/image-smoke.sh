@@ -92,7 +92,7 @@ main() {
             printf "Verified adb CLI from /tmp: %s\n" "$adb_from_tmp"
             printf "%s\n" "$adb_from_tmp" | grep -i "^Android Debug Bridge version " >/dev/null
             if [ "$(dpkg --print-architecture)" = amd64 ]; then
-                (cd /tmp && fastboot --version | grep -F "fastboot version 37.0.1" >/dev/null)
+                (cd /tmp && fastboot --version | grep -F "fastboot version 37.0.3" >/dev/null)
                 (cd /tmp && aapt2 version 2>&1 | grep -F "Android Asset Packaging Tool" >/dev/null)
                 (cd /tmp && apksigner version >/dev/null)
             fi
@@ -222,7 +222,7 @@ main() {
         | grep -i "^Android Debug Bridge version " >/dev/null
     if [[ "$(docker exec "$web_id" dpkg --print-architecture)" == amd64 ]]; then
         docker exec --workdir /tmp "$web_id" fastboot --version \
-            | grep -F "fastboot version 37.0.1" >/dev/null
+            | grep -F "fastboot version 37.0.3" >/dev/null
         docker exec --workdir /tmp "$web_id" aapt2 version 2>&1 \
             | grep -F "Android Asset Packaging Tool" >/dev/null
         docker exec --workdir /tmp "$web_id" sh -ec \
