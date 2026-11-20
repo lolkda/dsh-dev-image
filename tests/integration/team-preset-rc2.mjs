@@ -1,4 +1,4 @@
-// DSH 0.2.2-rc.2 Team has one subagent-tree identity. This harness exercises
+// DSH 0.2.2-rc.5 Team has one subagent-tree identity. This harness exercises
 // the same pre-publication preset contract against the new `ctx.subagents`
 // creation/message APIs. Only model IO is stopped at the request boundary.
 import test from 'node:test';

@@ -1,6 +1,6 @@
 {
   "package": "@deepseek-ai/dsh-subagent",
-  "version": "0.2.2-rc.2",
+  "version": "0.2.2-rc.5",
   "files": {
     "lib/index.js": {
       "beforeSha256": "47837c0cd3cd8259fbdd14b7a477f3df3f928946c5b9e261f35a883411ba3697",
