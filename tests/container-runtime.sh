@@ -47,7 +47,7 @@ run_runtime() {
     local mount="$1" program="$2"
     shift 2
     docker run --rm --network none --cap-add SYS_PTRACE \
-        --security-opt no-new-privileges:true --env DSH_PLUGINS= \
+        --security-opt no-new-privileges:true --env DSH_PLUGINS= --env DSH_IMAGE_BIN= \
         --mount "$mount" "$@" "$image" /bin/bash -euc "$program"
 }
 
