@@ -140,6 +140,7 @@ frida-trace --help
 |---|---|---|
 | `AGENT_HOME` | `/srv/agent` | Compose 的宿主挂载目录 |
 | `DSH_PROFILE` | `web` | DSH profile |
+| `DSH_IMAGE_BIN` | `/usr/local/bin/dsh` | 镜像内 DSH 可执行文件；避免持久化 HOME 的旧版 DSH 遮蔽新镜像 |
 | `DSH_PLUGINS` | `@lolkda/dsh-web-lan@latest` | 启动时安装的插件，空格分隔 |
 | `DSH_PLUGINS_REQUIRED` | `1` | 插件装不上时是否退出 |
 | `DSH_PLUGIN_REGISTRY` | `https://registry.npmjs.org` | 插件专用 npm 源 |

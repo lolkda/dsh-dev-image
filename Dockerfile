@@ -628,6 +628,7 @@ ENV npm_config_registry=https://registry.npmmirror.com \
 ENV HOME=/app/.home \
     USER=root \
     LOGNAME=root \
+    DSH_IMAGE_BIN=/usr/local/bin/dsh \
     npm_config_prefix=/app/.home/.local \
     PNPM_HOME=/app/.home/.local/share/pnpm \
     YARN_PREFIX=/app/.home/.local \

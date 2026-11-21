@@ -114,12 +114,18 @@ cd -- "$APP_DIR" || permission_error "$APP_DIR"
 log "以 root (0:0) 启动，HOME=$HOME"
 
 # pnpm 12 默认 24h 成熟期只在插件安装时关闭，用户项目仍用自己的默认策略。
+# 镜像自带的 DSH 必须优先于持久化 HOME 中留下的旧版 `dsh`。
+# 用户安装的普通 CLI 仍在 PATH 中保留；只有 DSH 自身和插件安装绑定到镜像运行时，
+# 否则拉取新镜像后旧 HOME 里的 rc.2 会继续遮蔽新镜像的 rc.5。
+dsh_bin="${DSH_IMAGE_BIN:-dsh}"
+[[ -x "$dsh_bin" ]] || dsh_bin=dsh
+
 # 插件源可独立于用户项目的 npm 源；明确传 --registry，避免 pnpm 读取别的配置。
 for spec in "${plugins[@]}"; do
     plugin_args=(plugin --profile "$profile" add "$spec")
     [[ -z "$plugin_registry" ]] || plugin_args+=(--registry="$plugin_registry")
     log "dsh ${plugin_args[*]}"
-    if ! PNPM_CONFIG_MINIMUM_RELEASE_AGE=0 dsh "${plugin_args[@]}"; then
+    if ! PNPM_CONFIG_MINIMUM_RELEASE_AGE=0 "$dsh_bin" "${plugin_args[@]}"; then
         if [[ "${DSH_PLUGINS_REQUIRED:-1}" == 1 ]]; then
             fatal "插件安装失败：$spec。只有允许缺少插件时才设 DSH_PLUGINS_REQUIRED=0；检查上方原始错误。"
         fi
@@ -130,6 +136,6 @@ done
 # dsh web 是 dsh --profile web 的简写；环境选择必须同时用于安装与启动。
 if [[ "$1" == dsh && "${2:-}" == web ]]; then
     shift 2
-    set -- dsh --profile "$profile" "$@"
+    set -- "$dsh_bin" --profile "$profile" "$@"
 fi
 exec "$@"

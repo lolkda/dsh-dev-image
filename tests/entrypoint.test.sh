@@ -41,7 +41,7 @@ setup_case() {
     export DSH_PLUGINS=''
     export DSH_PLUGINS_REQUIRED=1
     unset AGENT_UID AGENT_GID DSH_ENTRYPOINT_DROPPED PLUGIN_EXIT PLUGIN_ENV
-    unset DSH_PLUGIN_REGISTRY
+    unset DSH_PLUGIN_REGISTRY DSH_IMAGE_BIN
     unset PNPM_CONFIG_MINIMUM_RELEASE_AGE
     unset CARGO_HOME GOPATH GOMODCACHE GOCACHE PIP_CACHE_DIR npm_config_cache
     unset MAVEN_CONFIG GRADLE_USER_HOME UV_CACHE_DIR
@@ -141,6 +141,21 @@ plugin_install_uses_configured_registry() {
     export DSH_PLUGIN_REGISTRY='https://registry.npmjs.org'
     bash "$ROOT/entrypoint.sh" true
     test "$(tail -n 1 "$CALLS")" = '--registry=https://registry.npmjs.org'
+}
+
+image_dsh_wins_over_stale_home_path() {
+    setup_case
+    mkdir -p "$TMP/image-bin"
+    cat > "$TMP/image-bin/dsh" <<'EOS'
+#!/usr/bin/env bash
+printf 'image:%s\n' "$*" >> "$CALLS"
+EOS
+    chmod +x "$TMP/image-bin/dsh"
+    export DSH_IMAGE_BIN="$TMP/image-bin/dsh"
+    export DSH_PLUGINS='@example/plugin@1.0.0'
+    bash "$ROOT/entrypoint.sh" dsh web --port 9000
+    printf '%s\n' 'image:plugin --profile web add @example/plugin@1.0.0' 'image:--profile web --port 9000' > "$CASE_DIR/expected"
+    cmp "$CASE_DIR/expected" "$CALLS"
 }
 
 invalid_plugin_registry_is_rejected() {
@@ -283,6 +298,7 @@ run_case 'preserve literal plugin specs instead of expanding globs' plugin_specs
 run_case 'install plugins without the pnpm maturity cutoff' plugin_install_ignores_the_maturity_cutoff
 run_case 'keep the maturity cutoff override out of the main command' maturity_cutoff_override_stays_out_of_the_command
 run_case 'pass the configured plugin registry to dsh plugin' plugin_install_uses_configured_registry
+run_case 'use the image DSH instead of a stale persistent dsh' image_dsh_wins_over_stale_home_path
 run_case 'reject an invalid plugin registry before installing plugins' invalid_plugin_registry_is_rejected
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
